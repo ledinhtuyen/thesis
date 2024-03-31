@@ -12,17 +12,17 @@ hyp:
   min_lr: 1.0e-6
   base_lr: 1.5e-4
   weight_decay: 5.0e-2
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 16
 
 Model:
   name: 'mae_vit_base_patch16'
 
 Dataset:
-  prefix_path: '/home/s/endoscopy'
+  prefix_path: '/home/s/tuyenld/DATA'
   data_name: 'Endoscopy'
-  annotation_file: '/mnt/tuyenld/endoscopy/pretrain.json'
+  annotation_file: '/home/s/tuyenld/endoscopy/pretrain.json'
   img_size: 224
-  batch_size: 4
-  num_workers: 4
+  batch_size: 256
+  num_workers: 8
   pin_memory: True
   drop_last: True

@@ -100,7 +100,7 @@ class Trainer:
 
     self.train_dataloader = DataLoader(
       train_dataset, 
-      batch_size=self.effect_batch_size, 
+      batch_size=cfg.Dataset.batch_size, 
       shuffle=True, 
       num_workers=cfg.Dataset.num_workers, 
       pin_memory=cfg.Dataset.pin_memory,
@@ -108,7 +108,7 @@ class Trainer:
     )
     self.test_dataloader = DataLoader(
       test_dataset,
-      batch_size=self.effect_batch_size,
+      batch_size=cfg.Dataset.batch_size,
       shuffle=True,
       num_workers=cfg.Dataset.num_workers,
       pin_memory=cfg.Dataset.pin_memory
@@ -149,9 +149,6 @@ class Trainer:
       if (data_iter_step + 1) % self.gradient_accumulation_steps == 0:
         self.callbacks.run('on_train_accumulate_iter_end', loss=loss_value, lr=lr, global_step=int((data_iter_step / len(self.train_dataloader) + self.current_epoch) * 1000), epoch=self.current_epoch)
 
-
-    print("Averaged stats:", self.metric_logger)
-
   def test_one_epoch(self):
     self.model.eval()
 
@@ -161,7 +158,7 @@ class Trainer:
       for data_iter_step, data in enumerate(tqdm(self.test_dataloader)):
         data = data.cuda()
         loss, pred, mask = self.model(data)
-        data, pred, mask = data.cpu(), pred.cpu(), mask.cpu()
+        data, pred, mask = data[:self.cfg.visual_imgs].cpu(), pred[:self.cfg.visual_imgs].cpu(), mask[:self.cfg.visual_imgs].cpu()
         
         if visualize and self.current_epoch % self.save_period == 0:
           patch_size = self.model.patch_size
@@ -173,7 +170,7 @@ class Trainer:
           pred = pred * mask + data * (1 - mask)
 
           img = torch.cat([data * (1 - mask), pred, data], dim=0)
-          img = rearrange(img[:self.cfg.visual_imgs * 3], '(v h1) c h w -> v c (h1 h) w', h1=self.cfg.visual_imgs)
+          img = rearrange(img, '(v h1) c h w -> v c (h1 h) w', h1=self.cfg.visual_imgs)
           
           self.callbacks.run('on_val_batch_end', img=img, epoch=self.current_epoch)
           visualize = False
@@ -199,6 +196,7 @@ class Trainer:
       if self.current_epoch % self.save_period == 0:  
         self.save_checkpoint()
       self.test_one_epoch()
+      LOGGER.info(f"Averaged stats: {self.metric_logger}")
       
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))

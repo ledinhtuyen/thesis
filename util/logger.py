@@ -29,7 +29,7 @@ class Logger():
             self.tb = SummaryWriter(str(s))
 
     def on_train_accumulate_iter_end(self, loss, lr, global_step, epoch):
-        # Callback runs on train batch end
+        # Callback runs on train accumulate iter end
         if self.tb:
             self.tb.add_scalar('train/epoch', epoch, global_step)
             self.tb.add_scalar('train/global_step', global_step, global_step)
