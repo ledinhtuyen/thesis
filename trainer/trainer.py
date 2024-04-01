@@ -39,6 +39,7 @@ class Trainer:
     self.build_optimizer(cfg)
     self.build_dataloader(cfg)
     self.current_epoch = 0
+    self.best_loss = inf
 
     self.metric_logger = self.init_metric_logger()
   
@@ -48,7 +49,6 @@ class Trainer:
     metric_logger.add_meter('lr')
     metric_logger.add_meter('test_loss')
     metric_logger.add_meter('best_loss')
-    metric_logger.update({'best_loss': inf})
     return metric_logger
     
   def setup(self, cfg):
@@ -153,7 +153,7 @@ class Trainer:
     self.model.eval()
 
     visualize = True
-    
+    total_test_loss = 0
     with torch.no_grad():
       for data_iter_step, data in enumerate(tqdm(self.test_dataloader)):
         data = data.cuda()
@@ -175,12 +175,15 @@ class Trainer:
           self.callbacks.run('on_val_batch_end', img=img, epoch=self.current_epoch)
           visualize = False
 
-        test_loss = loss.item()
-        self.metric_logger.update({'test_loss': test_loss})
+        total_test_loss += loss.item()
 
-        if test_loss < self.metric_logger.best_loss.avg:
-          self.metric_logger.best_loss.update(test_loss)
-          self.save_checkpoint('best.pth')
+    test_loss = total_test_loss / len(self.test_dataloader)
+    self.metric_logger.update({'test_loss': test_loss})
+
+    if test_loss < self.best_loss:
+      self.best_loss = test_loss
+      self.metric_logger.update({'best_loss': test_loss})
+      self.save_checkpoint('best.pth')
     self.callbacks.run('on_val_end', metric_logger=self.metric_logger, epoch=self.current_epoch)
 
   def train(self, resume_checkpoint=None):
