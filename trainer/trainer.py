@@ -9,6 +9,8 @@ from datetime import datetime
 import logging
 from tqdm import tqdm
 import json
+import warnings
+warnings.filterwarnings("ignore")
 
 import torch
 from torch.utils.data import DataLoader
