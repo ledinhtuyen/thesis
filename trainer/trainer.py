@@ -5,6 +5,10 @@ import time
 import math
 from contextlib import redirect_stdout
 import yaml
+from datetime import datetime
+import logging
+from tqdm import tqdm
+import json
 
 import torch
 from torch.utils.data import DataLoader
@@ -12,9 +16,6 @@ from torch.optim import AdamW
 from torch import inf
 from einops import rearrange
 
-from datetime import datetime
-import logging
-from tqdm import tqdm
 import util.lr_sched as lr_sched
 from util.logger import Logger
 from util.general import init_seeds, colorstr, methods
@@ -30,16 +31,14 @@ class Trainer:
     LOGGER.info(colorstr('Initializing Trainer...'))
     self.cfg = cfg
     self.callbacks = callbacks
-    self.gradient_accumulation_steps = cfg.hyp.gradient_accumulation_steps
-    self.effect_batch_size = cfg.Dataset.batch_size * cfg.hyp.gradient_accumulation_steps
-    self.cfg.hyp.add('lr', cfg.hyp.base_lr * self.effect_batch_size / 256)
+    self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    self.current_epoch = 0
+    self.best_loss = inf
 
     self.setup(cfg)
     self.build_model(cfg)
     self.build_optimizer(cfg)
     self.build_dataloader(cfg)
-    self.current_epoch = 0
-    self.best_loss = inf
 
     self.metric_logger = self.init_metric_logger()
   
@@ -81,22 +80,42 @@ class Trainer:
       img_size=cfg.Dataset.img_size,
       norm_pix_loss=cfg.norm_pix_loss
     )
+    self.model = self.model.to(self.device)
     LOGGER.info(f"Model: {cfg.Model.name}")
     LOGGER.info(self.model)
-    return self.model.cuda()
 
   def build_optimizer(self, cfg):
     LOGGER.info(colorstr('Building Optimizer...'))
-    self.optimizer = AdamW(self.model.parameters(), lr=cfg.hyp.lr, weight_decay=cfg.hyp.weight_decay, betas=(0.9, 0.95))
+    
+    lr = (cfg.hyp.base_lr * cfg.Dataset.batch_size * cfg.hyp.gradient_accumulation_steps) / 256
+    weight_decay = cfg.hyp.weight_decay
+      
+    self.cfg.hyp.add('lr', lr)
+      
+    self.optimizer = AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.95))
+    LOGGER.info(f"Optimizer: AdamW(lr={lr}, weight_decay={weight_decay})")
+
     self.loss_scaler = NativeScaler()
-    LOGGER.info(f"Optimizer: AdamW(lr={cfg.hyp.base_lr * self.effect_batch_size / 256}, weight_decay={cfg.hyp.weight_decay})")
     LOGGER.info(self.optimizer)
 
   def build_dataloader(self, cfg):
     LOGGER.info(colorstr('Building DataLoader...'))
-    medical_data = Medical(Path(cfg.Dataset.prefix_path), Path(cfg.Dataset.annotation_file))
-    train_dataset = PretrainMedical(medical_data, train=True, transform=train_transform(input_size=cfg.Dataset.img_size))
-    test_dataset = PretrainMedical(medical_data, train=False, transform=test_transform(input_size=cfg.Dataset.img_size))
+    meanstd = {'mean': torch.tensor([0.485, 0.456, 0.406]), 'std': torch.tensor([0.229, 0.224, 0.225])}
+    if os.path.exists(cfg.Dataset.meanstd_file):
+      meanstd = torch.load(cfg.Dataset.meanstd_file)
+    
+    LOGGER.info(f"{colorstr('Mean')}: {meanstd['mean']}, {colorstr('Std')}: {meanstd['std']}")
+    
+    if os.path.exists(cfg.Dataset.train_json_file) and os.path.exists(cfg.Dataset.test_json_file):
+      LOGGER.info(f"Found json files: {cfg.Dataset.train_json_file}, {cfg.Dataset.test_json_file}")
+      train_data, test_data = json.load(open(cfg.Dataset.train_json_file)), json.load(open(cfg.Dataset.test_json_file))
+    else:
+      LOGGER.info(f"Json files not found, creating...")
+      medical_data = Medical(Path(cfg.Dataset.prefix_path), Path(cfg.Dataset.annotation_file))
+      train_data, test_data = medical_data.get_train_data(), medical_data.get_test_data()
+
+    train_dataset = PretrainMedical(train_data, json_file=cfg.Dataset.train_json_file, meanstd_file=cfg.Dataset.meanstd_file, prefix_path=cfg.Dataset.prefix_path, train=True, transform=train_transform(input_size=cfg.Dataset.img_size, meanstd=meanstd))
+    test_dataset = PretrainMedical(test_data, json_file=cfg.Dataset.test_json_file, meanstd_file=cfg.Dataset.meanstd_file, prefix_path=cfg.Dataset.prefix_path, train=False, transform=test_transform(input_size=cfg.Dataset.img_size))
 
     self.train_dataloader = DataLoader(
       train_dataset, 
@@ -123,12 +142,13 @@ class Trainer:
     header = 'Epoch [{}]: '.format(self.current_epoch)
     LOGGER.info(header)
 
+    accumulate_iter = self.cfg.hyp.gradient_accumulation_steps
 
     for data_iter_step, data in enumerate(tqdm(self.train_dataloader)):
-      if data_iter_step % self.gradient_accumulation_steps == 0:
+      if data_iter_step % accumulate_iter == 0:
         lr_sched.adjust_learning_rate(self.optimizer, data_iter_step / len(self.train_dataloader) + self.current_epoch, self.cfg)
       
-      data = data.cuda()
+      data = data.to(self.device)
     
       with torch.cuda.amp.autocast():
         loss, _, _ = self.model(data)
@@ -137,16 +157,16 @@ class Trainer:
       if not math.isfinite(loss_value):
         print("Loss is {}, stopping training".format(loss_value))
         sys.exit(1)
-      loss /= self.gradient_accumulation_steps
+      loss /= accumulate_iter
       self.loss_scaler(loss, self.optimizer, parameters=self.model.parameters(),
-                    update_grad=(data_iter_step + 1) % self.gradient_accumulation_steps == 0)
-      if (data_iter_step + 1) % self.gradient_accumulation_steps == 0:
+                    update_grad=(data_iter_step + 1) % accumulate_iter == 0)
+      if (data_iter_step + 1) % accumulate_iter == 0:
         self.optimizer.zero_grad()
       
       lr = self.optimizer.param_groups[0]["lr"]  
       self.metric_logger.update({'loss': loss_value, 'lr': lr})
       
-      if (data_iter_step + 1) % self.gradient_accumulation_steps == 0:
+      if (data_iter_step + 1) % accumulate_iter == 0:
         self.callbacks.run('on_train_accumulate_iter_end', loss=loss_value, lr=lr, global_step=int((data_iter_step / len(self.train_dataloader) + self.current_epoch) * 1000), epoch=self.current_epoch)
 
   def test_one_epoch(self):
@@ -156,7 +176,7 @@ class Trainer:
     total_test_loss = 0
     with torch.no_grad():
       for data_iter_step, data in enumerate(tqdm(self.test_dataloader)):
-        data = data.cuda()
+        data = data.to(self.device)
         loss, pred, mask = self.model(data)
         data, pred, mask = data[:self.cfg.visual_imgs].cpu(), pred[:self.cfg.visual_imgs].cpu(), mask[:self.cfg.visual_imgs].cpu()
         
@@ -185,6 +205,7 @@ class Trainer:
       self.metric_logger.update({'best_loss': test_loss})
       self.save_checkpoint('best.pth')
     self.callbacks.run('on_val_end', metric_logger=self.metric_logger, epoch=self.current_epoch)
+    return test_loss
 
   def train(self, resume_checkpoint=None):
     self.model.train()
@@ -212,7 +233,7 @@ class Trainer:
                     'scaler': self.loss_scaler.state_dict(),
                     'lr': self.optimizer.param_groups[0]['lr'],
                     'epoch': self.current_epoch,
-                    'loss': self.metric_logger.loss,
+                    'loss': self.metric_logger.get_meter('loss').get_avg(),
                     }
       torch.save(checkpoint, checkpoint_path)
       logging.info(f"Checkpoint saved at {checkpoint_path}")

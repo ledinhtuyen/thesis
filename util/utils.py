@@ -17,9 +17,12 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-        
+
     def __str__(self):
         return f'{self.avg:.4f}'
+
+    def get_avg(self):
+        return self.avg
 
 class MetricMeter(object):
     """A collection of metrics.
@@ -43,13 +46,8 @@ class MetricMeter(object):
     def add_meter(self, name):
         self.meters[name] = AverageMeter()
         
-    def __getattr__(self, attr):
-        if attr in self.meters:
-            return self.meters[attr]
-        if attr in self.__dict__:
-            return self.__dict__[attr]
-        raise AttributeError("'{}' object has no attribute '{}'".format(
-            type(self).__name__, attr))
+    def get_meter(self, name):
+        return self.meters[name]
 
     def update(self, input_dict):
         if input_dict is None:

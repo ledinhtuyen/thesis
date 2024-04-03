@@ -3,14 +3,14 @@ project: 'runs/pretrain'
 snapshot_dir: 'weight'
 log_dir: 'log'
 resume_checkpoint: '' # path to checkpoint if you want to resume training
-warmup_epochs: 30
-epochs: 300
+warmup_epochs: 160
+epochs: 1600
 save_period: 5
 visual_imgs: 5
 
 hyp:
   min_lr: 1.0e-6
-  base_lr: 1.5e-4
+  base_lr: 1.5e-3
   weight_decay: 5.0e-2
   gradient_accumulation_steps: 16
 
@@ -26,3 +26,6 @@ Dataset:
   num_workers: 8
   pin_memory: True
   drop_last: True
+  train_json_file: '/home/s/tuyenld/mae/configs/train.json'
+  test_json_file: '/home/s/tuyenld/mae/configs/test.json'
+  meanstd_file: '/home/s/tuyenld/mae/configs/meanstd.pth'

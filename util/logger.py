@@ -42,6 +42,6 @@ class Logger():
             
     def on_val_end(self, metric_logger, epoch):
         if self.tb:
-            self.tb.add_scalar('val/loss', metric_logger.test_loss.avg, epoch)
-            self.tb.add_scalar('val/best_loss', metric_logger.best_loss.avg, epoch)
+            self.tb.add_scalar('val/loss', metric_logger.get_meter('test_loss').get_avg(), epoch)
+            self.tb.add_scalar('val/best_loss', metric_logger.get_meter('best_loss').get_avg(), epoch)
             self.tb.add_scalar('val/epoch', epoch, epoch)
