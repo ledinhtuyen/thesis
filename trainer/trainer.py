@@ -144,6 +144,7 @@ class Trainer:
 
     accumulate_iter = self.cfg.hyp.gradient_accumulation_steps
 
+    start_time_one_epoch = time.time()
     for data_iter_step, data in enumerate(tqdm(self.train_dataloader)):
       if data_iter_step % accumulate_iter == 0:
         lr_sched.adjust_learning_rate(self.optimizer, data_iter_step / len(self.train_dataloader) + self.current_epoch, self.cfg)
@@ -165,9 +166,11 @@ class Trainer:
       
       lr = self.optimizer.param_groups[0]["lr"]  
       self.metric_logger.update({'loss': loss_value, 'lr': lr})
-      
+
       if (data_iter_step + 1) % accumulate_iter == 0:
         self.callbacks.run('on_train_accumulate_iter_end', loss=loss_value, lr=lr, global_step=int((data_iter_step / len(self.train_dataloader) + self.current_epoch) * 1000), epoch=self.current_epoch)
+
+    self.callbacks.run('on_train_epoch_end', time=time.time() - start_time_one_epoch, epoch=self.current_epoch)
 
   def test_one_epoch(self):
     self.model.eval()

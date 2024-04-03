@@ -36,6 +36,10 @@ class Logger():
             self.tb.add_scalar('train/loss', loss, global_step)
             self.tb.add_scalar('train/lr', lr, global_step)
 
+    def on_train_epoch_end(self, time, epoch):
+        if self.tb:
+            self.tb.add_scalar('train/time', time, epoch)
+
     def on_val_batch_end(self, img, epoch):
         if self.tb:
             self.tb.add_images('val/images', img, epoch)
