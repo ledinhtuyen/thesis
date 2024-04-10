@@ -23,7 +23,7 @@ from util.logger import Logger
 from util.general import init_seeds, colorstr, methods
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.utils import MetricMeter
-import model.mae as mae
+import model
 from dataset.Medical import *
 
 LOGGER = logging.getLogger(__name__)
@@ -77,8 +77,8 @@ class Trainer:
 
   def build_model(self, cfg):
     # Get model from cfg.Model.name in mae/model/mae.py
-    LOGGER.info(colorstr('Building Model...'))
-    self.model = mae.__dict__[cfg.Model.name](
+    LOGGER.info(colorstr('Building Model {}...'.format(cfg.Model.name)))
+    self.model = model.__dict__[cfg.Model.name](
       img_size=cfg.Dataset.img_size,
       norm_pix_loss=cfg.norm_pix_loss
     )

@@ -8,12 +8,15 @@ import torchvision.transforms as transforms
 from torchvision.io import read_image
 from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
+from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
-def train_transform(input_size=384, meanstd={'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]}):
+def train_transform(input_size=384, meanstd={'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD}):
     transform_train = transforms.Compose([
-            transforms.RandomResizedCrop(input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
-            transforms.RandomHorizontalFlip(),
-            transforms.Normalize(mean=meanstd['mean'], std=meanstd['std'])])
+        transforms.Resize((input_size, input_size), interpolation=3),  # 3 is bicubic
+        transforms.RandomResizedCrop(input_size, scale=(0.2, 1.0), interpolation=3),
+        transforms.RandomHorizontalFlip(),
+        transforms.Normalize(mean=meanstd['mean'], std=meanstd['std'])
+    ])
     return transform_train
 
 def test_transform(input_size=384):
@@ -21,7 +24,7 @@ def test_transform(input_size=384):
             transforms.Resize((input_size, input_size), interpolation=3)])
     return transform_test
 
-def unnormalize(img, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], max_pixel_value=255.0):
+def unnormalize(img, mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD, max_pixel_value=255.0):
     img = (img * std  + mean) * max_pixel_value
     return np.clip(np.round(img), 0, 255).astype(np.uint8)
 

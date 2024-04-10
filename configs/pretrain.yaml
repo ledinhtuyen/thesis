@@ -3,16 +3,16 @@ project: 'runs/pretrain'
 snapshot_dir: 'weight'
 log_dir: 'log'
 resume_checkpoint: '' # path to checkpoint if you want to resume training
-warmup_epochs: 160
-epochs: 1600
+warmup_epochs: 5
+epochs: 500
 save_period: 5
 visual_imgs: 5
 
 hyp:
   min_lr: 1.0e-6
-  base_lr: 1.5e-3
+  base_lr: 1.5e-4
   weight_decay: 5.0e-2
-  gradient_accumulation_steps: 16
+  gradient_accumulation_steps: 1
 
 Model:
   name: 'mae_vit_base_patch16'
@@ -21,9 +21,9 @@ Dataset:
   prefix_path: '/home/s/tuyenld/DATA'
   data_name: 'Endoscopy'
   annotation_file: '/home/s/tuyenld/endoscopy/pretrain.json'
-  img_size: 224
-  batch_size: 256
-  num_workers: 8
+  img_size: 384
+  batch_size: 64
+  num_workers: 16
   pin_memory: True
   drop_last: True
   train_json_file: '/home/s/tuyenld/mae/configs/train.json'
