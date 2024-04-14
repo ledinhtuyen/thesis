@@ -12,20 +12,20 @@ hyp:
   min_lr: 1.0e-6
   base_lr: 1.5e-4
   weight_decay: 5.0e-2
-  gradient_accumulation_steps: 1
+  gradient_accumulation_steps: 64
 
 Model:
-  name: 'mae_vit_base_patch16'
+  name: 'mae_base_by_tuyenld_patch16_dec512'
 
 Dataset:
-  prefix_path: '/home/s/tuyenld/DATA'
+  prefix_path: '/mnt/tuyenld/data/endoscopy'
   data_name: 'Endoscopy'
-  annotation_file: '/home/s/tuyenld/endoscopy/pretrain.json'
+  annotation_file: '/mnt/tuyenld/data/endoscopy/processed/pretrain.json'
   img_size: 384
   batch_size: 64
   num_workers: 16
   pin_memory: True
   drop_last: True
-  train_json_file: '/home/s/tuyenld/mae/configs/train.json'
-  test_json_file: '/home/s/tuyenld/mae/configs/test.json'
-  meanstd_file: '/home/s/tuyenld/mae/configs/meanstd.pth'
+  train_json_file: '/mnt/tuyenld/mae/configs/train.json'
+  test_json_file: '/mnt/tuyenld/mae/configs/test.json'
+  meanstd_file: '/mnt/tuyenld/mae/configs/meanstd.pth'

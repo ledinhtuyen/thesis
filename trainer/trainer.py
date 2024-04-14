@@ -187,11 +187,10 @@ class Trainer:
         
         if visualize and self.current_epoch % self.save_period == 0:
           patch_size = self.model.patch_size
-          grid_size = self.model.grid_size
           
           mask = mask.unsqueeze(-1).tile(1, 1, patch_size ** 2 * 3)
-          mask = rearrange(mask, 'b (g g1) (c p p1) -> b c (g p) (g1 p1)', c=3, p=patch_size, g=grid_size)
-          pred = rearrange(pred, 'b (g g1) (c p p1) -> b c (g p) (g1 p1)', c=3, p=patch_size, g=grid_size)
+          mask = self.model.unpatchify(mask)
+          pred = self.model.unpatchify(pred)
           pred = pred * mask + data * (1 - mask)
 
           img = torch.cat([data * (1 - mask), pred, data], dim=0)
