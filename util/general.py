@@ -122,15 +122,26 @@ def methods(instance):
     # Get class/instance methods
     return [f for f in dir(instance) if callable(getattr(instance, f)) and not f.startswith("__")]
 
-def create_new_exp(path, sep=''):
+def create_new_exp(path, exp_name='', sep=''):
     path = Path(path)
+    
     if path.exists():
-        dirs = glob.glob(f"{path}/exp{sep}*")  # similar paths
-        matches = [re.search(rf"%s/exp{sep}(\d+)" % path.stem, d) for d in dirs]
-        i = [int(m.groups()[0]) for m in matches if m]
-        n = max(i) + 1 if i else 0
+        if exp_name == '':
+            dirs = glob.glob(f"{path}/exp{sep}*")  # similar paths
+            matches = [re.search(rf"%s/exp{sep}(\d+)" % path.stem, d) for d in dirs]
+            i = [int(m.groups()[0]) for m in matches if m]
+            n = max(i) + 1 if i else 0
+            p = path / f'exp{sep}{n}'
+        else:
+            p = path / exp_name
     else:
         path.mkdir(parents=True, exist_ok=True)
         n = 0
-    os.mkdir(f'{path}/exp{sep}{n}')
-    return path / f'exp{sep}{n}'
+        
+        if exp_name == '':
+            p = path / f'exp{sep}{n}'
+        else:
+            p = path / exp_name
+
+    os.mkdir(p)
+    return p

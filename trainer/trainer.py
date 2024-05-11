@@ -5,7 +5,7 @@ import time
 import math
 from contextlib import redirect_stdout
 import yaml
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from tqdm import tqdm
 import json
@@ -116,8 +116,8 @@ class Trainer:
       medical_data = Medical(Path(cfg.Dataset.prefix_path), Path(cfg.Dataset.annotation_file))
       train_data, test_data = medical_data.get_train_data(), medical_data.get_test_data()
 
-    train_dataset = PretrainMedical(train_data, json_file=cfg.Dataset.train_json_file, meanstd_file=cfg.Dataset.meanstd_file, prefix_path=cfg.Dataset.prefix_path, train=True, transform=train_transform(input_size=cfg.Dataset.img_size, meanstd=meanstd))
-    test_dataset = PretrainMedical(test_data, json_file=cfg.Dataset.test_json_file, meanstd_file=cfg.Dataset.meanstd_file, prefix_path=cfg.Dataset.prefix_path, train=False, transform=test_transform(input_size=cfg.Dataset.img_size))
+    train_dataset = PretrainMedical(train_data, json_file=cfg.Dataset.train_json_file, meanstd_file=cfg.Dataset.meanstd_file, prefix_path=cfg.Dataset.prefix_path, train=True)
+    test_dataset = PretrainMedical(test_data, json_file=cfg.Dataset.test_json_file, meanstd_file=cfg.Dataset.meanstd_file, prefix_path=cfg.Dataset.prefix_path, train=False) 
 
     self.train_dataloader = DataLoader(
       train_dataset, 
@@ -218,6 +218,9 @@ class Trainer:
     
     LOGGER.info(f'{colorstr("Start Training:")} from epoch {self.current_epoch} to {self.epochs}')
     start_time = time.time()
+
+    # Start training
+    self.current_epoch = 0
     for epoch in range(self.current_epoch, self.epochs):
       self.current_epoch = epoch
       self.train_one_epoch()
@@ -227,7 +230,7 @@ class Trainer:
       LOGGER.info(f"Averaged stats: {self.metric_logger}")
       
     total_time = time.time() - start_time
-    total_time_str = str(datetime.timedelta(seconds=int(total_time)))
+    total_time_str = str(timedelta(seconds=int(total_time)))
     LOGGER.info(f"Training time {total_time_str}")
 
   def save_checkpoint(self, filename='last.pth'):

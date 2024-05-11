@@ -1,6 +1,7 @@
 import os
 import json
 from pathlib import Path
+import PIL
 
 import torch
 import numpy as np
@@ -10,19 +11,18 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
-def train_transform(input_size=384, meanstd={'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD}):
-    transform_train = transforms.Compose([
-        transforms.Resize((input_size, input_size), interpolation=3),  # 3 is bicubic
-        transforms.RandomResizedCrop(input_size, scale=(0.2, 1.0), interpolation=3),
-        transforms.RandomHorizontalFlip(),
-        transforms.Normalize(mean=meanstd['mean'], std=meanstd['std'])
-    ])
-    return transform_train
-
-def test_transform(input_size=384):
-    transform_test = transforms.Compose([
+def build_transforms(input_size=224, is_train=False, meanstd={'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD}):    
+    if is_train:
+        transform = transforms.Compose([
+            transforms.RandomResizedCrop((input_size, input_size), scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=meanstd["mean"], std=meanstd["std"])])
+    else:
+        transform = transforms.Compose([
             transforms.Resize((input_size, input_size), interpolation=3)])
-    return transform_test
+        
+    return transform
 
 def unnormalize(img, mean=IMAGENET_DEFAULT_MEAN, std=IMAGENET_DEFAULT_STD, max_pixel_value=255.0):
     img = (img * std  + mean) * max_pixel_value
@@ -40,18 +40,18 @@ def mean_and_std(train_data, prefix_path, meanstd_file):
     if os.path.isfile(meanstd_file):
         meanstd = torch.load(meanstd_file)
     else:
-            mean = torch.zeros(3)
-            std = torch.zeros(3)
+        mean = torch.zeros(3)
+        std = torch.zeros(3)
 
-            for img_path in train_data:
-                img = read_image(os.path.join(prefix_path, img_path)) / 255.0
-                mean += img.mean(dim=(1, 2))
-                std += img.std(dim=(1, 2))
-                
-            mean /= len(train_data)
-            std /= len(train_data)
-            meanstd = {'mean': mean, 'std': std}
-            torch.save(meanstd, meanstd_file)
+        for img_path in train_data:
+            img = read_image(os.path.join(prefix_path, img_path)) / 255.0
+            mean += img.mean(dim=(1, 2))
+            std += img.std(dim=(1, 2))
+            
+        mean /= len(train_data)
+        std /= len(train_data)
+        meanstd = {'mean': mean, 'std': std}
+        torch.save(meanstd, meanstd_file)
     # END CODE
     return meanstd
 
@@ -70,21 +70,25 @@ class Medical(object):
         return self.test_data
 
 class PretrainMedical(Dataset):
-    def __init__(self, data=None, json_file="", meanstd_file="", prefix_path=None, train=False, transform=None):
+    def __init__(self, data=None, json_file="", meanstd_file="", prefix_path=None, train=False):
         self.data = data
-        
+
         if not os.path.exists(json_file):
             with open(json_file, 'w') as f:
                 json.dump(data, f)
             if train:
-                mean_and_std(data, prefix_path, meanstd_file)
+                self.meanstd = mean_and_std(data, prefix_path, meanstd_file)
         elif os.path.exists(json_file):
             self.data = json.load(open(json_file))
             self.meanstd = torch.load(meanstd_file)
         elif not os.path.exists(json_file) and data is None:
             raise ValueError("json_file are None")
 
-        self.transform = transform
+        if train:
+            self.transform = build_transforms(is_train=True, meanstd=self.meanstd)
+        else:
+            self.transform = build_transforms(is_train=False, meanstd=self.meanstd)
+
         self.prefix_path = prefix_path
         
     def __len__(self):
@@ -92,16 +96,20 @@ class PretrainMedical(Dataset):
         
     def __getitem__(self, idx):
         img_path = self.data[idx]
-        img = read_image(os.path.join(self.prefix_path, img_path)) / 255.0
+        img = PIL.Image.open(os.path.join(self.prefix_path, img_path))
 
         if self.transform:
             img = self.transform(img)
         return img
     
 if __name__ == '__main__':
-    medical_data = Medical(Path("/home/s/tuyenld/DATA"), Path("/home/s/tuyenld/endoscopy/pretrain.json"))
-    train_dataset = PretrainMedical(medical_data.get_train_data(), train=True, 
-                                    transform=transforms.Resize((384,384), interpolation=3))
-    test_dataset = PretrainMedical(medical_data.get_test_data(), train=False)
-    train_dataloader = DataLoader(train_dataset, batch_size=32, num_workers=4)
-    print(mean_and_std(medical_data.get_train_data(), "/home/s/tuyenld/DATA", "/home/s/tuyenld/mae/configs/meanstd.pth"))
+    meanstd = torch.load("/home/s/tuyenld/mae/configs/meanstd.pth")
+    # medical_data = Medical(Path("/home/s/tuyenld/DATA"), Path("/home/s/tuyenld/endoscopy/pretrain.json"))
+    train_dataset = PretrainMedical(train=True, 
+                                    json_file="/home/s/tuyenld/mae/configs/train.json",
+                                    meanstd_file="/home/s/tuyenld/mae/configs/meanstd.pth",
+                                    prefix_path="/home/s/tuyenld/DATA")
+    # test_dataset = PretrainMedical(medical_data.get_test_data(), train=False)
+    # train_dataloader = DataLoader(train_dataset, batch_size=32, num_workers=4)
+    # print(mean_and_std(medical_data.get_train_data(), "/home/s/tuyenld/DATA", "/home/s/tuyenld/mae/configs/meanstd.pth"))
+    print(train_dataset[0])

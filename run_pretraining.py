@@ -36,7 +36,7 @@ def setup(cfg):
     set_logging()
     
     print_args(FILE.stem, cfg)
-    new_exp = create_new_exp(Path(cfg.project))
+    new_exp = create_new_exp(Path(cfg.project), exp_name=cfg.exp_name)
     cfg.add('save_dir', Path(new_exp))
 
 def main(opt, callbacks=Callbacks()):

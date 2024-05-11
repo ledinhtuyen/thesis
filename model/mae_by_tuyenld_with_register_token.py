@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.init import trunc_normal_
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -48,14 +49,17 @@ class MaskedAutoEncoder(nn.Module):
         num_patches: number of patches
         mask_ratio: percentage of masked patches
     """
-    def __init__(self, img_size=224, patch_size=16, encoder_embedding_dim=768, 
+    def __init__(self, img_size=224, 
+                  patch_size=16, 
+                  encoder_embedding_dim=768, 
                   encoder_layers=12,
                   n_heads_encoder_layer=12,
                   decoder_embedding_dim=512,
-                  decoder_layers=4,
+                  decoder_layers=8,
                   n_heads_decoder_layer=16,
                   p_dropout=0.5,
                   mask_ratio=0.75,
+                  num_register_tokens=0,
                   norm_pix_loss=False):
         super().__init__()
         self.encoder_embedding_dim = encoder_embedding_dim
@@ -65,6 +69,7 @@ class MaskedAutoEncoder(nn.Module):
         self.grid_size = img_size // patch_size
         self.num_patches = (img_size // patch_size) ** 2
         self.mask_ratio = mask_ratio
+        self.num_register_tokens = num_register_tokens
 
         self.masked_length = int(self.num_patches * mask_ratio)
         self.keep_length = self.num_patches - self.masked_length
@@ -88,12 +93,26 @@ class MaskedAutoEncoder(nn.Module):
         self.encoder_input_projection = nn.Linear(patch_size * patch_size * 3, encoder_embedding_dim)
         self.decoder_input_projection = nn.Linear(encoder_embedding_dim, decoder_embedding_dim)
         self.decoder_output_projection = nn.Linear(decoder_embedding_dim, patch_size * patch_size * 3)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, encoder_embedding_dim))
-        self.encoder_position_encoding = nn.Parameter(torch.randn(1, self.num_patches, encoder_embedding_dim))
-        self.decoder_position_encoding = nn.Parameter(torch.randn(1, self.num_patches, decoder_embedding_dim))
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, encoder_embedding_dim))
+        self.encoder_position_encoding = nn.Parameter(torch.zeros(1, self.num_patches, encoder_embedding_dim))
+        self.decoder_position_encoding = nn.Parameter(torch.zeros(1, self.num_patches, decoder_embedding_dim))
         self.masked_tokens = nn.Parameter(torch.randn(1, 1, decoder_embedding_dim))
+        assert num_register_tokens >= 0
+        self.register_tokens = (
+            nn.Parameter(torch.zeros(1, num_register_tokens, encoder_embedding_dim)) if num_register_tokens else None
+        )
 
         self.norm_pix_loss = norm_pix_loss
+        
+        self.init_weights()
+        
+    def init_weights(self):
+        trunc_normal_(self.encoder_position_encoding, std=0.02)
+        trunc_normal_(self.decoder_position_encoding, std=0.02)
+        nn.init.normal_(self.cls_token, std=1e-6)
+        if self.register_tokens is not None:
+            nn.init.normal_(self.register_tokens, std=1e-6)
+        # named_apply(init_weights_vit_timm, self)
 
     def patchify(self, imgs):
         """Splitting images into patches.
