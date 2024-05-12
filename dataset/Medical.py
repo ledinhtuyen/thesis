@@ -20,7 +20,9 @@ def build_transforms(input_size=224, is_train=False, meanstd={'mean': IMAGENET_D
             transforms.Normalize(mean=meanstd["mean"], std=meanstd["std"])])
     else:
         transform = transforms.Compose([
-            transforms.Resize((input_size, input_size), interpolation=3)])
+            transforms.Resize((input_size, input_size), interpolation=3),
+            transforms.ToTensor(),
+            ])
         
     return transform
 
@@ -96,20 +98,22 @@ class PretrainMedical(Dataset):
         
     def __getitem__(self, idx):
         img_path = self.data[idx]
-        img = PIL.Image.open(os.path.join(self.prefix_path, img_path))
+        path = Path(self.prefix_path) / img_path
+        img = PIL.Image.open(path)
 
         if self.transform:
             img = self.transform(img)
         return img
     
 if __name__ == '__main__':
-    meanstd = torch.load("/home/s/tuyenld/mae/configs/meanstd.pth")
+    meanstd = torch.load("/mnt/tuyenld/mae/configs/meanstd.pth")
     # medical_data = Medical(Path("/home/s/tuyenld/DATA"), Path("/home/s/tuyenld/endoscopy/pretrain.json"))
-    train_dataset = PretrainMedical(train=True, 
-                                    json_file="/home/s/tuyenld/mae/configs/train.json",
-                                    meanstd_file="/home/s/tuyenld/mae/configs/meanstd.pth",
-                                    prefix_path="/home/s/tuyenld/DATA")
+    test_dataset = PretrainMedical(train=False, 
+                                    json_file="/mnt/tuyenld/mae/configs/test.json",
+                                    meanstd_file="/mnt/tuyenld/mae/configs/meanstd.pth",
+                                    prefix_path="/home/s/DATA")
     # test_dataset = PretrainMedical(medical_data.get_test_data(), train=False)
     # train_dataloader = DataLoader(train_dataset, batch_size=32, num_workers=4)
     # print(mean_and_std(medical_data.get_train_data(), "/home/s/tuyenld/DATA", "/home/s/tuyenld/mae/configs/meanstd.pth"))
-    print(train_dataset[0])
+    for data in test_dataset:
+        print(data)

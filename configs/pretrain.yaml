@@ -1,9 +1,8 @@
 # Parameters
-project: 'runv2/pretrain'
-exp_name: 'mae_meta_norm_pix_img224_p16'
-snapshot_dir: 'weight'
-log_dir: 'log'
-resume_checkpoint: '' # path to checkpoint if you want to resume training
+project: "runv2/pretrain"
+snapshot_dir: "weight"
+log_dir: "log"
+resume_checkpoint: "" # path to checkpoint if you want to resume training
 warmup_epochs: 5
 epochs: 500
 save_period: 5
@@ -16,17 +15,17 @@ hyp:
   gradient_accumulation_steps: 4
 
 Model:
-  name: 'mae_vit_base_patch16'
+  name: "mae_vit_base_patch16"
 
 Dataset:
-  prefix_path: '/home/s/tuyenld/DATA'
-  data_name: 'Endoscopy'
-  annotation_file: '/home/s/tuyenld/endoscopy/pretrain.json'
+  prefix_path: "/home/s/DATA"
+  data_name: "Endoscopy"
+  annotation_file: "/mnt/tuyenld/endoscopy/pretrain.json"
   img_size: 224
   batch_size: 64
   num_workers: 16
   pin_memory: True
   drop_last: True
-  train_json_file: '/home/s/tuyenld/mae/configs/train.json'
-  test_json_file: '/home/s/tuyenld/mae/configs/test.json'
-  meanstd_file: '/home/s/tuyenld/mae/configs/meanstd.pth'
+  train_json_file: "/mnt/tuyenld/mae/configs/train.json"
+  test_json_file: "/mnt/tuyenld/mae/configs/test.json"
+  meanstd_file: "/mnt/tuyenld/mae/configs/meanstd.pth"

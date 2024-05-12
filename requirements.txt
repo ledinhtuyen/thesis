@@ -4,3 +4,4 @@ einops
 wandb
 tqdm
 numpy
+sckit-learn

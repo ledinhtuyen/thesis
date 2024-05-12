@@ -28,6 +28,7 @@ def parse_opt(known=False):
     parser = argparse.ArgumentParser()
     parser.add_argument('--cfg', type=str, help='experiment configuration file name (e.g. pretrain)', required=True)
     parser.add_argument('--norm_pix_loss', action='store_true', help='normalize pixel loss')
+    parser.add_argument('--exp_name', type=str, help='experiment name', required=True)
 
     opt = parser.parse_known_args()[0] if known else parser.parse_args()
     return opt
