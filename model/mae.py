@@ -25,12 +25,13 @@ class MaskedAutoencoderViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False):
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False, num_register_tokens=0):
         super().__init__()
         
         self.img_size = img_size
         self.patch_size = patch_size
         self.grid_size = img_size // patch_size
+        self.num_register_tokens = num_register_tokens
 
         # --------------------------------------------------------------------------
         # MAE encoder specifics
@@ -39,6 +40,10 @@ class MaskedAutoencoderViT(nn.Module):
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False)  # fixed sin-cos embedding
+        assert num_register_tokens >= 0
+        self.register_tokens = (
+            nn.Parameter(torch.zeros(1, num_register_tokens, embed_dim)) if num_register_tokens > 0 else None
+        )
                 
         self.blocks = nn.ModuleList([
             Block(
@@ -47,9 +52,6 @@ class MaskedAutoencoderViT(nn.Module):
                 mlp_ratio, 
                 qkv_bias=True, 
                 norm_layer=norm_layer,
-                # proj_drop=0.3,
-                # attn_drop=0.3,
-                # drop_path=0.3
             )
             for i in range(depth)])
         self.norm = norm_layer(embed_dim)
@@ -70,9 +72,6 @@ class MaskedAutoencoderViT(nn.Module):
                 mlp_ratio, 
                 qkv_bias=True, 
                 norm_layer=norm_layer,
-                proj_drop=0.3,
-                attn_drop=0.3,
-                drop_path=0.3
             )
             for i in range(decoder_depth)])
 
@@ -100,6 +99,8 @@ class MaskedAutoencoderViT(nn.Module):
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
         torch.nn.init.normal_(self.cls_token, std=.02)
         torch.nn.init.normal_(self.mask_token, std=.02)
+        if self.register_tokens is not None:
+            torch.nn.init.normal_(self.register_tokens, std=1e-6)
 
         # initialize nn.Linear and nn.LayerNorm
         self.apply(self._init_weights)
@@ -182,7 +183,17 @@ class MaskedAutoencoderViT(nn.Module):
         # append cls token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
         cls_tokens = cls_token.expand(x.shape[0], -1, -1)
-        x = torch.cat((cls_tokens, x), dim=1)
+        if self.register_tokens is None:
+            x = torch.cat((cls_tokens, x), dim=1)
+        else:
+            x = torch.cat(
+                (
+                    cls_tokens,
+                    self.register_tokens.expand(x.shape[0], -1, -1),
+                    x,
+                ),
+                dim=1,
+            )
 
         # apply Transformer blocks
         for blk in self.blocks:
@@ -197,9 +208,10 @@ class MaskedAutoencoderViT(nn.Module):
 
         # append mask tokens to sequence
         mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
-        x_ = torch.cat([x[:, 1:, :], mask_tokens], dim=1)  # no cls token
+        
+        x_ = torch.cat([x[:, 1+self.num_register_tokens:, :], mask_tokens], dim=1)  # no cls token
         x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
-        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
+        x = torch.cat([x[:, :1+self.num_register_tokens, :], x_], dim=1)  # append cls token
 
         # add pos embed
         x = x + self.decoder_pos_embed
@@ -213,7 +225,7 @@ class MaskedAutoencoderViT(nn.Module):
         x = self.decoder_pred(x)
 
         # remove cls token
-        x = x[:, 1:, :]
+        x = x[:, 1+self.num_register_tokens:, :]
 
         return x
 
@@ -249,6 +261,12 @@ def mae_vit_base_patch16_dec512d8b(**kwargs):
         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     return model
 
+def mae_vit_base_patch16_dec512d8b_with_register(**kwargs):
+    model = MaskedAutoencoderViT(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12,
+        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), num_register_tokens=4, **kwargs)
+    return model
 
 def mae_vit_large_patch16_dec512d8b(**kwargs):
     model = MaskedAutoencoderViT(
@@ -268,5 +286,6 @@ def mae_vit_huge_patch14_dec512d8b(**kwargs):
 
 # set recommended archs
 mae_vit_base_patch16 = mae_vit_base_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
+mae_vit_base_patch16_with_register = mae_vit_base_patch16_dec512d8b_with_register
 mae_vit_large_patch16 = mae_vit_large_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
 mae_vit_huge_patch14 = mae_vit_huge_patch14_dec512d8b  # decoder: 512 dim, 8 blocks
