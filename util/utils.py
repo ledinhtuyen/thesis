@@ -25,6 +25,9 @@ class AverageMeter(object):
 
     def get_avg(self):
         return self.avg
+    
+    def get_val(self):
+        return self.val
 
 class MetricMeter(object):
     """A collection of metrics.

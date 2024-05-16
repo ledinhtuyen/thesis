@@ -4,4 +4,6 @@ einops
 wandb
 tqdm
 numpy
-sckit-learn
+scikit-learn
+tensorboard
+timm

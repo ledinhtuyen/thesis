@@ -207,14 +207,29 @@ class MaskedAutoencoderViT(nn.Module):
         x = self.decoder_embed(x)
 
         # append mask tokens to sequence
-        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 - x.shape[1], 1)
-        
-        x_ = torch.cat([x[:, 1+self.num_register_tokens:, :], mask_tokens], dim=1)  # no cls token
+        mask_tokens = self.mask_token.repeat(x.shape[0], ids_restore.shape[1] + 1 + self.num_register_tokens - x.shape[1], 1)
+
+        x_ = torch.cat([x[:, 1 + self.num_register_tokens:, :], mask_tokens], dim=1)  # no cls token
         x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
-        x = torch.cat([x[:, :1+self.num_register_tokens, :], x_], dim=1)  # append cls token
+        
+        
+        if self.register_tokens is not None:
+            register_tokens = x[:, 1:1 + self.num_register_tokens, :]
+        
+        x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
 
         # add pos embed
         x = x + self.decoder_pos_embed
+        
+        if self.register_tokens is not None:
+            x = torch.cat(
+                (
+                    x[:, :1, :],
+                    register_tokens,
+                    x[:, 1:, :],
+                ),
+                dim=1,
+            )
 
         # apply Transformer blocks
         for blk in self.decoder_blocks:
@@ -225,7 +240,7 @@ class MaskedAutoencoderViT(nn.Module):
         x = self.decoder_pred(x)
 
         # remove cls token
-        x = x[:, 1+self.num_register_tokens:, :]
+        x = x[:, 1 + self.num_register_tokens:, :]
 
         return x
 
@@ -266,6 +281,13 @@ def mae_vit_base_patch16_dec512d8b_with_register(**kwargs):
         patch_size=16, embed_dim=768, depth=12, num_heads=12,
         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), num_register_tokens=4, **kwargs)
+    return model
+
+def mae_vit_base_patch16_dec512d8b_with_register8(**kwargs):
+    model = MaskedAutoencoderViT(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12,
+        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), num_register_tokens=8, **kwargs)
     return model
 
 def mae_vit_large_patch16_dec512d8b(**kwargs):

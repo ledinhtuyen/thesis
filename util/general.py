@@ -143,5 +143,6 @@ def create_new_exp(path, exp_name='', sep=''):
         else:
             p = path / exp_name
 
-    os.mkdir(p)
+    if not p.exists():
+        p.mkdir(parents=True, exist_ok=True)
     return p

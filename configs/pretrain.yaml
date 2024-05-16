@@ -15,17 +15,17 @@ hyp:
   gradient_accumulation_steps: 4
 
 Model:
-  name: "mae_vit_base_patch16"
+  name: "mae_vit_base_patch16_dec512d8b_with_register8"
 
 Dataset:
-  prefix_path: "/home/s/tuyenld/DATA"
+  prefix_path: "/home/s/DATA"
   data_name: "Endoscopy"
-  annotation_file: "/mnt/tuyenld/endoscopy/pretrain.json"
+  annotation_file: "./configs/pretrain.json"
   img_size: 224
   batch_size: 64
-  num_workers: 16
+  num_workers: 64
   pin_memory: True
   drop_last: True
-  train_json_file: "/home/s/tuyenld/mae/configs/train.json"
-  test_json_file: "/home/s/tuyenld/mae/configs/test.json"
-  meanstd_file: "/home/s/tuyenld/mae/configs/meanstd.pth"
+  train_json_file: "./configs/train.json"
+  test_json_file: "./configs/test.json"
+  meanstd_file: "./configs/meanstd.pth"
