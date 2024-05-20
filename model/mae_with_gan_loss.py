@@ -13,10 +13,13 @@ from functools import partial
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from timm.models.vision_transformer import PatchEmbed, Block
 
 from util.pos_embed import get_2d_sincos_pos_embed
+
+from pytorch_revgrad import RevGrad
 
 
 class MaskedAutoencoderViT(nn.Module):
@@ -78,7 +81,20 @@ class MaskedAutoencoderViT(nn.Module):
         self.decoder_norm = norm_layer(decoder_embed_dim)
         self.decoder_pred = nn.Linear(decoder_embed_dim, patch_size**2 * in_chans, bias=True) # decoder to patch
         # --------------------------------------------------------------------------
+        # Discriminator
+        
+        self.discriminator = nn.Sequential(
+            RevGrad(),
+            nn.Linear(embed_dim, embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, 384),
+            nn.ReLU(),
+            nn.Linear(384, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1),
+        )
 
+        # --------------------------------------------------------------------------
         self.norm_pix_loss = norm_pix_loss
 
         self.initialize_weights()
@@ -243,6 +259,19 @@ class MaskedAutoencoderViT(nn.Module):
         x = x[:, 1 + self.num_register_tokens:, :]
 
         return x
+    
+    def forward_discriminator_loss(self, pred, mask, smooth=0.1):
+        """
+        x: [N, L, p*p*3]
+        mask: [N, L], 0 is keep, 1 is remove
+        """
+        x = self.discriminator(pred)
+        x = x.squeeze(-1)  # [N, L]
+        
+        # binary cross entropy with logits and label smoothing
+        label = torch.where(mask == 0, 1 - smooth, smooth)
+        
+        return F.binary_cross_entropy_with_logits(x, label)
 
     def forward_loss(self, imgs, pred, mask):
         """
@@ -266,37 +295,38 @@ class MaskedAutoencoderViT(nn.Module):
         latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
         loss_mae = self.forward_loss(imgs, pred, mask)
-        
+        loss_discriminator = self.forward_discriminator_loss(pred, mask)
         loss = {
-            'loss_backward': loss_mae,
+            'loss_backward': loss_mae + loss_discriminator,
             'loss_mae': loss_mae.item(),
+            'loss_gan': loss_discriminator.item(),
         }
-        
+
         return loss, pred, mask
 
 
-def mae_vit_base_patch16_dec512d8b(**kwargs):
+def mae_vit_base_patch16_dec512d8b_with_gan_loss(**kwargs):
     model = MaskedAutoencoderViT(
         patch_size=16, embed_dim=768, depth=12, num_heads=12,
         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), **kwargs)
     return model
 
-def mae_vit_base_patch16_dec512d8b_with_register(**kwargs):
+def mae_vit_base_patch16_dec512d8b_with_register_gan_loss(**kwargs):
     model = MaskedAutoencoderViT(
         patch_size=16, embed_dim=768, depth=12, num_heads=12,
         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), num_register_tokens=4, **kwargs)
     return model
 
-def mae_vit_base_patch16_dec512d8b_with_register8(**kwargs):
+def mae_vit_base_patch16_dec512d8b_with_register8_gan_loss(**kwargs):
     model = MaskedAutoencoderViT(
         patch_size=16, embed_dim=768, depth=12, num_heads=12,
         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), num_register_tokens=8, **kwargs)
     return model
 
-def mae_vit_large_patch16_dec512d8b(**kwargs):
+def mae_vit_large_patch16_dec512d8b_with_gan_loss(**kwargs):
     model = MaskedAutoencoderViT(
         patch_size=16, embed_dim=1024, depth=24, num_heads=16,
         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
@@ -304,7 +334,7 @@ def mae_vit_large_patch16_dec512d8b(**kwargs):
     return model
 
 
-def mae_vit_huge_patch14_dec512d8b(**kwargs):
+def mae_vit_huge_patch14_dec512d8b_with_gan_loss(**kwargs):
     model = MaskedAutoencoderViT(
         patch_size=14, embed_dim=1280, depth=32, num_heads=16,
         decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
@@ -313,7 +343,5 @@ def mae_vit_huge_patch14_dec512d8b(**kwargs):
 
 
 # set recommended archs
-mae_vit_base_patch16 = mae_vit_base_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
-mae_vit_base_patch16_with_register = mae_vit_base_patch16_dec512d8b_with_register
-mae_vit_large_patch16 = mae_vit_large_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
-mae_vit_huge_patch14 = mae_vit_huge_patch14_dec512d8b  # decoder: 512 dim, 8 blocks
+mae_vit_base_patch16_with_gan_loss = mae_vit_base_patch16_dec512d8b_with_gan_loss  # decoder: 512 dim, 8 blocks
+mae_vit_base_patch16_with_register_gan_loss = mae_vit_base_patch16_dec512d8b_with_register_gan_loss

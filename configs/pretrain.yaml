@@ -15,7 +15,8 @@ hyp:
   gradient_accumulation_steps: 4
 
 Model:
-  name: "mae_vit_base_patch16_dec512d8b_with_register8"
+  name: "mae_vit_base_patch16_with_register_gan_loss"
+  use_gan_loss: True
 
 Dataset:
   prefix_path: "/home/s/DATA"
@@ -23,7 +24,7 @@ Dataset:
   annotation_file: "./configs/pretrain.json"
   img_size: 224
   batch_size: 64
-  num_workers: 64
+  num_workers: 16
   pin_memory: True
   drop_last: True
   train_json_file: "./configs/train.json"

@@ -36,6 +36,7 @@ class Trainer:
     self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     self.current_epoch = 0
     self.best_loss = inf
+    self.use_gan_loss = cfg.Model.use_gan_loss
 
     self.setup(cfg)
     self.build_model(cfg)
@@ -47,6 +48,8 @@ class Trainer:
   def init_metric_logger(self):
     metric_logger = MetricMeter(delimiter="   ")
     metric_logger.add_meter('loss')
+    if self.use_gan_loss:
+      metric_logger.add_meter('gan_loss')
     metric_logger.add_meter('lr')
     metric_logger.add_meter('test_loss')
     metric_logger.add_meter('best_loss')
@@ -156,10 +159,24 @@ class Trainer:
       with torch.cuda.amp.autocast():
         loss, _, _ = self.model(data)
 
-      loss_value = loss.item()
-      if not math.isfinite(loss_value):
-        print("Loss is {}, stopping training".format(loss_value))
+      # loss_value = loss.item()
+      for k, v in loss.items():
+        if "backward" in k:
+          loss = v
+        elif "mae" in k:
+          loss_mae = v
+        elif "gan" in k:
+          loss_gan = v
+
+      if not math.isfinite(loss_mae):
+        print("MAE Loss is {}, stopping training".format(loss_mae))
         sys.exit(1)
+      
+      if self.use_gan_loss:
+        if not math.isfinite(loss_gan):
+          print("GAN Loss is {}, stopping training".format(loss_gan))
+          sys.exit(1)
+
       loss /= accumulate_iter
       self.loss_scaler(loss, self.optimizer, parameters=self.model.parameters(),
                     update_grad=(data_iter_step + 1) % accumulate_iter == 0)
@@ -167,7 +184,16 @@ class Trainer:
         self.optimizer.zero_grad()
       
       lr = self.optimizer.param_groups[0]["lr"]  
-      self.metric_logger.update({'loss': loss_value, 'lr': lr})
+      self.metric_logger.update({'loss': loss_mae, 'lr': lr})
+      if self.use_gan_loss:
+        self.metric_logger.update({'gan_loss': loss_gan})
+        
+      loss_value = {
+        "loss_mae": loss_mae,
+      }
+      
+      if self.use_gan_loss:
+        loss_value["loss_gan"] = loss_gan
 
       if (data_iter_step + 1) % accumulate_iter == 0:
         self.callbacks.run('on_train_accumulate_iter_end', loss=loss_value, lr=lr, global_step=int((data_iter_step / len(self.train_dataloader) + self.current_epoch) * 1000), epoch=self.current_epoch)
@@ -199,7 +225,7 @@ class Trainer:
           self.callbacks.run('on_val_batch_end', img=img, epoch=self.current_epoch)
           visualize = False
 
-        total_test_loss += loss.item()
+        total_test_loss += loss["loss_mae"]
 
     test_loss = total_test_loss / len(self.test_dataloader)
     self.metric_logger.update({'test_loss': test_loss})
@@ -240,7 +266,7 @@ class Trainer:
                     'scaler': self.loss_scaler.state_dict(),
                     'lr': self.optimizer.param_groups[0]['lr'],
                     'epoch': self.current_epoch,
-                    'loss': self.metric_logger.get_meter('loss').get_avg(),
+                    'loss': self.metric_logger.get_meter('loss').get_val(),
                     }
       torch.save(checkpoint, checkpoint_path)
       logging.info(f"Checkpoint saved at {checkpoint_path}")

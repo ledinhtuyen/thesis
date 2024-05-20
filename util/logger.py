@@ -33,7 +33,8 @@ class Logger():
         if self.tb:
             self.tb.add_scalar('train/epoch', epoch, global_step)
             self.tb.add_scalar('train/global_step', global_step, global_step)
-            self.tb.add_scalar('train/loss', loss, global_step)
+            for k, v in loss.items():
+                self.tb.add_scalar(f'train/{k}', v, global_step)
             self.tb.add_scalar('train/lr', lr, global_step)
 
     def on_train_epoch_end(self, time, epoch):
