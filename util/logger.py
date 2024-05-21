@@ -28,14 +28,14 @@ class Logger():
             self.logger.info(f"{prefix}Start with 'tensorboard --logdir {s}', view at http://localhost:6006/")
             self.tb = SummaryWriter(str(s))
 
-    def on_train_accumulate_iter_end(self, loss, lr, global_step, epoch):
+    def on_train_accumulate_iter_end(self, metric_logger, global_step, epoch):
         # Callback runs on train accumulate iter end
         if self.tb:
             self.tb.add_scalar('train/epoch', epoch, global_step)
             self.tb.add_scalar('train/global_step', global_step, global_step)
-            for k, v in loss.items():
-                self.tb.add_scalar(f'train/{k}', v, global_step)
-            self.tb.add_scalar('train/lr', lr, global_step)
+            for name, meter in metric_logger.meters.items():
+                if 'train' in name:
+                    self.tb.add_scalar(f'{name}', meter.get_val(), global_step)
 
     def on_train_epoch_end(self, time, epoch):
         if self.tb:
@@ -47,6 +47,7 @@ class Logger():
             
     def on_val_end(self, metric_logger, epoch):
         if self.tb:
-            self.tb.add_scalar('val/loss', metric_logger.get_meter('test_loss').get_val(), epoch)
-            self.tb.add_scalar('val/best_loss', metric_logger.get_meter('best_loss').get_val(), epoch)
+            for name, meter in metric_logger.meters.items():
+                if 'val' in name:
+                    self.tb.add_scalar(f'{name}', meter.get_val(), epoch)
             self.tb.add_scalar('val/epoch', epoch, epoch)

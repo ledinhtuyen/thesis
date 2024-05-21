@@ -294,12 +294,12 @@ class MaskedAutoencoderViT(nn.Module):
     def forward(self, imgs, mask_ratio=0.75):
         latent, mask, ids_restore = self.forward_encoder(imgs, mask_ratio)
         pred = self.forward_decoder(latent, ids_restore)  # [N, L, p*p*3]
-        loss_mae = self.forward_loss(imgs, pred, mask)
-        loss_discriminator = self.forward_discriminator_loss(pred, mask)
+        mae_loss = self.forward_loss(imgs, pred, mask)
+        discriminator_loss = self.forward_discriminator_loss(pred, mask)
         loss = {
-            'loss_backward': loss_mae + loss_discriminator,
-            'loss_mae': loss_mae.item(),
-            'loss_gan': loss_discriminator.item(),
+            'backward_loss': mae_loss + discriminator_loss,
+            'mae_loss': mae_loss,
+            'gan_loss': discriminator_loss,
         }
 
         return loss, pred, mask

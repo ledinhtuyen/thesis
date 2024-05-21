@@ -12,19 +12,19 @@ hyp:
   min_lr: 1.0e-6
   base_lr: 1.5e-4
   weight_decay: 0.001
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 16
 
 Model:
-  name: "mae_vit_base_patch16_with_register_gan_loss"
-  use_gan_loss: True
+  name: "mae_gan_vit_base_patch16_with_register"
+  use_gan_loss: False
 
 Dataset:
-  prefix_path: "/home/s/DATA"
+  prefix_path: "/home/s/tuyenld/DATA"
   data_name: "Endoscopy"
   annotation_file: "./configs/pretrain.json"
   img_size: 224
-  batch_size: 64
-  num_workers: 16
+  batch_size: 16
+  num_workers: 8
   pin_memory: True
   drop_last: True
   train_json_file: "./configs/train.json"

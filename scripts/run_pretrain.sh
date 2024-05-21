@@ -1,4 +1,4 @@
-CUDA_VISIBLE_DEVICES=1 python run_pretraining.py \
+CUDA_VISIBLE_DEVICES=0 python run_pretraining.py \
                        --cfg pretrain \
                        --exp_name="mae_meta_register_gan_loss_unnorm_pix_img224_p16" \
                       #  --norm_pix_loss

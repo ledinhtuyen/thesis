@@ -17,14 +17,18 @@ from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch import inf
 from einops import rearrange
+import timm.optim.optim_factory as optim_factory
 
 import util.lr_sched as lr_sched
 from util.logger import Logger
 from util.general import init_seeds, colorstr, methods
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
 from util.utils import MetricMeter
+from util.adapt_weight import aw_loss
 import model
 from dataset.Medical import *
+
+torch.autograd.set_detect_anomaly(True)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -47,12 +51,12 @@ class Trainer:
   
   def init_metric_logger(self):
     metric_logger = MetricMeter(delimiter="   ")
-    metric_logger.add_meter('loss')
+    metric_logger.add_meter('train/loss')
     if self.use_gan_loss:
-      metric_logger.add_meter('gan_loss')
-    metric_logger.add_meter('lr')
-    metric_logger.add_meter('test_loss')
-    metric_logger.add_meter('best_loss')
+      metric_logger.add_meter('train/gan_loss')
+    metric_logger.add_meter('train/lr')
+    metric_logger.add_meter('val/loss')
+    metric_logger.add_meter('val/best_loss')
     return metric_logger
     
   def setup(self, cfg):
@@ -162,41 +166,34 @@ class Trainer:
       # loss_value = loss.item()
       for k, v in loss.items():
         if "backward" in k:
-          loss = v
+          backward_loss = v
         elif "mae" in k:
-          loss_mae = v
+          mae_loss = v.item()
         elif "gan" in k:
-          loss_gan = v
+          gan_loss = v.item()
 
-      if not math.isfinite(loss_mae):
-        print("MAE Loss is {}, stopping training".format(loss_mae))
+      if not math.isfinite(mae_loss):
+        print("MAE Loss is {}, stopping training".format(mae_loss))
         sys.exit(1)
       
       if self.use_gan_loss:
-        if not math.isfinite(loss_gan):
-          print("GAN Loss is {}, stopping training".format(loss_gan))
+        if not math.isfinite(gan_loss):
+          print("GAN Loss is {}, stopping training".format(gan_loss))
           sys.exit(1)
 
-      loss /= accumulate_iter
-      self.loss_scaler(loss, self.optimizer, parameters=self.model.parameters(),
+      backward_loss /= accumulate_iter
+      self.loss_scaler(backward_loss, self.optimizer, parameters=self.model.parameters(),
                     update_grad=(data_iter_step + 1) % accumulate_iter == 0)
       if (data_iter_step + 1) % accumulate_iter == 0:
         self.optimizer.zero_grad()
       
       lr = self.optimizer.param_groups[0]["lr"]  
-      self.metric_logger.update({'loss': loss_mae, 'lr': lr})
+      self.metric_logger.update({'train/loss': mae_loss, 'train/lr': lr})
       if self.use_gan_loss:
-        self.metric_logger.update({'gan_loss': loss_gan})
-        
-      loss_value = {
-        "loss_mae": loss_mae,
-      }
-      
-      if self.use_gan_loss:
-        loss_value["loss_gan"] = loss_gan
+        self.metric_logger.update({'train/gan_loss': gan_loss})
 
       if (data_iter_step + 1) % accumulate_iter == 0:
-        self.callbacks.run('on_train_accumulate_iter_end', loss=loss_value, lr=lr, global_step=int((data_iter_step / len(self.train_dataloader) + self.current_epoch) * 1000), epoch=self.current_epoch)
+        self.callbacks.run('on_train_accumulate_iter_end', metric_logger=self.metric_logger, global_step=int((data_iter_step / len(self.train_dataloader) + self.current_epoch) * 1000), epoch=self.current_epoch)
 
     self.callbacks.run('on_train_epoch_end', time=time.time() - start_time_one_epoch, epoch=self.current_epoch)
 
@@ -225,14 +222,14 @@ class Trainer:
           self.callbacks.run('on_val_batch_end', img=img, epoch=self.current_epoch)
           visualize = False
 
-        total_test_loss += loss["loss_mae"]
+        total_test_loss += loss["mae_loss"].item()
 
     test_loss = total_test_loss / len(self.test_dataloader)
-    self.metric_logger.update({'test_loss': test_loss})
+    self.metric_logger.update({'val/loss': test_loss})
 
     if test_loss < self.best_loss:
       self.best_loss = test_loss
-      self.metric_logger.update({'best_loss': test_loss})
+      self.metric_logger.update({'val/best_loss': test_loss})
       self.save_checkpoint('best.pth')
     self.callbacks.run('on_val_end', metric_logger=self.metric_logger, epoch=self.current_epoch)
     return test_loss
@@ -266,7 +263,7 @@ class Trainer:
                     'scaler': self.loss_scaler.state_dict(),
                     'lr': self.optimizer.param_groups[0]['lr'],
                     'epoch': self.current_epoch,
-                    'loss': self.metric_logger.get_meter('loss').get_val(),
+                    'loss': self.metric_logger.get_meter('train/loss').get_val(),
                     }
       torch.save(checkpoint, checkpoint_path)
       logging.info(f"Checkpoint saved at {checkpoint_path}")
@@ -281,3 +278,150 @@ class Trainer:
       self.optimizer.param_groups[0]['lr'] = checkpoint['lr']
       LOGGER.info(f"Checkpoint loaded from {checkpoint_path} with epoch {self.current_epoch}, lr={self.optimizer.param_groups[0]['lr']}")
       return self.current_epoch + 1
+
+class MAEGANTrainer(Trainer):
+  def __init__(self, cfg, callbacks=None):
+    super().__init__(cfg, callbacks)
+    
+  def init_metric_logger(self):
+    metric_logger = MetricMeter(delimiter="   ")
+    metric_logger.add_meter('train/loss') # MAE Loss
+    metric_logger.add_meter('train/gen_loss')
+    metric_logger.add_meter('train/dis_loss')
+    metric_logger.add_meter('train/adv_loss')
+    metric_logger.add_meter('train/lr')
+    metric_logger.add_meter('val/loss') # MAE Loss
+    metric_logger.add_meter('val/gen_loss')
+    metric_logger.add_meter('val/dis_loss')
+    metric_logger.add_meter('val/adv_loss')
+    metric_logger.add_meter('val/best_loss') # Best MAE Loss
+    return metric_logger
+
+  def build_optimizer(self, cfg):
+    LOGGER.info(colorstr('Building Optimizer...'))
+    
+    lr = (cfg.hyp.base_lr * cfg.Dataset.batch_size * cfg.hyp.gradient_accumulation_steps) / 256
+    weight_decay = cfg.hyp.weight_decay
+      
+    self.cfg.hyp.add('lr', lr)
+
+    param_groups = optim_factory.param_groups_weight_decay(self.model, weight_decay=weight_decay)
+    
+    self.optimizer = AdamW(param_groups, lr=lr, betas=(0.9, 0.95))
+    
+    LOGGER.info(f"Optimizer: AdamW(lr={lr}, weight_decay={weight_decay})")
+    
+    self.loss_scaler = NativeScaler()
+    LOGGER.info(self.optimizer)
+
+  def train_one_epoch(self):
+    self.model.train()
+    self.optimizer.zero_grad()
+    header = 'Epoch [{}]: '.format(self.current_epoch)
+    LOGGER.info(header)
+
+    accumulate_iter = self.cfg.hyp.gradient_accumulation_steps
+
+    start_time_one_epoch = time.time()
+    for data_iter_step, data in enumerate(tqdm(self.train_dataloader)):
+      if data_iter_step % accumulate_iter == 0:
+        lr_sched.adjust_learning_rate(self.optimizer, data_iter_step / len(self.train_dataloader) + self.current_epoch, self.cfg)
+      
+      data = data.to(self.device)
+    
+      with torch.cuda.amp.autocast():
+        loss, _, _ = self.model(data)
+        
+      for k, v in loss.items():
+        if not math.isfinite(v.item()):
+          print(f"{k} is {v.item()}, stopping training")
+          sys.exit(1)
+
+      gen_loss = aw_loss(loss["mae_loss"], loss["adv_loss"], self.optimizer, self.model)
+      gen_loss_value = gen_loss.item()
+      if not math.isfinite(gen_loss_value):
+          print("Loss Generator is {}, stopping training".format(gen_loss_value))
+          sys.exit(1)
+
+      gen_loss /= accumulate_iter
+      self.loss_scaler(gen_loss, self.optimizer, parameters=self.model.parameters(),
+                    update_grad=(data_iter_step + 1) % accumulate_iter == 0, retain_graph = True)
+      if (data_iter_step + 1) % accumulate_iter == 0:
+        self.optimizer.zero_grad()
+      
+      with torch.cuda.amp.autocast():
+        loss, _, _ = self.model(data)
+      
+      disc_loss_value = loss["disc_loss"].item()
+      mae_loss_value = loss["mae_loss"].item()
+      adv_loss_value = loss["adv_loss"].item()
+
+      if not math.isfinite(disc_loss_value):
+          print("Loss is {}, stopping training".format(disc_loss_value))
+          sys.exit(1)
+
+      loss["disc_loss"] /= accumulate_iter
+      loss["mae_loss"] /= accumulate_iter
+      self.loss_scaler(loss["disc_loss"], self.optimizer, parameters=self.model.parameters(),
+                  update_grad=(data_iter_step + 1) % accumulate_iter == 0, retain_graph = True)
+      if (data_iter_step + 1) % accumulate_iter == 0:
+          self.optimizer.zero_grad()
+      
+      lr = self.optimizer.param_groups[0]["lr"]
+      self.metric_logger.update(
+        {
+          'train/loss': mae_loss_value, 
+          'train/gen_loss': gen_loss_value, 
+          'train/dis_loss': disc_loss_value, 
+          'train/adv_loss': adv_loss_value, 
+          'train/lr': lr
+        }
+      )
+
+      if (data_iter_step + 1) % accumulate_iter == 0:
+        self.callbacks.run('on_train_accumulate_iter_end', metric_logger=self.metric_logger, global_step=int((data_iter_step / len(self.train_dataloader) + self.current_epoch) * 1000), epoch=self.current_epoch)
+
+    self.callbacks.run('on_train_epoch_end', time=time.time() - start_time_one_epoch, epoch=self.current_epoch)
+
+  def test_one_epoch(self):
+    self.model.eval()
+
+    visualize = True
+    total_test_loss = 0
+    with torch.no_grad():
+      for data_iter_step, data in enumerate(tqdm(self.test_dataloader)):
+        data = data.to(self.device)
+        loss, pred, mask = self.model(data)
+        data, pred, mask = data[:self.cfg.visual_imgs].cpu(), pred[:self.cfg.visual_imgs].cpu(), mask[:self.cfg.visual_imgs].cpu()
+        
+        if visualize and self.current_epoch % self.save_period == 0:
+          patch_size = self.model.patch_size
+          
+          mask = mask.unsqueeze(-1).tile(1, 1, patch_size ** 2 * 3)
+          mask = self.model.unpatchify(mask)
+          pred = self.model.unpatchify(pred)
+          pred = pred * mask + data * (1 - mask)
+
+          img = torch.cat([data * (1 - mask), pred, data], dim=0)
+          img = rearrange(img, '(v h1) c h w -> v c (h1 h) w', h1=self.cfg.visual_imgs)
+          
+          self.callbacks.run('on_val_batch_end', img=img, epoch=self.current_epoch)
+          visualize = False
+
+        total_test_loss += loss["mae_loss"].item()
+
+    test_loss = total_test_loss / len(self.test_dataloader)
+    self.metric_logger.update(
+      {
+        'val/loss': test_loss,
+        'val/gen_loss': loss["gen_loss"].item(),
+        'val/dis_loss': loss["dis_loss"].item(),
+        'val/adv_loss': loss["adv_loss"].item()
+      })
+
+    if test_loss < self.best_loss:
+      self.best_loss = test_loss
+      self.metric_logger.update({'val/best_loss': test_loss})
+      self.save_checkpoint('best.pth')
+    self.callbacks.run('on_val_end', metric_logger=self.metric_logger, epoch=self.current_epoch)
+    return test_loss

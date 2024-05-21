@@ -13,11 +13,11 @@ from util.general import (
     create_new_exp
 )
 from util.callbacks import Callbacks
-from trainer import Trainer
+from trainer import Trainer, MAEGANTrainer
 
 
 FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # EfficientTeacher root directory
+ROOT = FILE.parents[0] 
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
@@ -47,7 +47,7 @@ def main(opt, callbacks=Callbacks()):
     
     setup(cfg)
 
-    trainer = Trainer(cfg, callbacks)
+    trainer = MAEGANTrainer(cfg, callbacks)
     if cfg.resume_checkpoint != '':
         trainer.train(resume_checkpoint=cfg.resume_checkpoint)
     else:
