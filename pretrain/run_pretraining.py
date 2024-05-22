@@ -47,7 +47,7 @@ def main(opt, callbacks=Callbacks()):
     
     setup(cfg)
 
-    trainer = MAEGANTrainer(cfg, callbacks)
+    trainer = Trainer(cfg, callbacks)
     if cfg.resume_checkpoint != '':
         trainer.train(resume_checkpoint=cfg.resume_checkpoint)
     else:

@@ -329,7 +329,7 @@ class MAEGANTrainer(Trainer):
       
       data = data.to(self.device)
     
-      with torch.cuda.amp.autocast():
+      with torch.cuda.amp.autocast(enabled=False):
         loss, _, _ = self.model(data)
         
       for k, v in loss.items():
@@ -349,7 +349,7 @@ class MAEGANTrainer(Trainer):
       if (data_iter_step + 1) % accumulate_iter == 0:
         self.optimizer.zero_grad()
       
-      with torch.cuda.amp.autocast():
+      with torch.cuda.amp.autocast(enabled=False):
         loss, _, _ = self.model(data)
       
       disc_loss_value = loss["disc_loss"].item()
