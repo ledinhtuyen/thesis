@@ -100,8 +100,9 @@ class Trainer:
     weight_decay = cfg.hyp.weight_decay
       
     self.cfg.hyp.add('lr', lr)
-      
-    self.optimizer = AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay, betas=(0.9, 0.95))
+    
+    param_groups = optim_factory.param_groups_weight_decay(self.model, weight_decay=weight_decay)
+    self.optimizer = AdamW(param_groups, lr=lr, betas=(0.9, 0.95))
     LOGGER.info(f"Optimizer: AdamW(lr={lr}, weight_decay={weight_decay})")
 
     self.loss_scaler = NativeScaler()
@@ -304,19 +305,46 @@ class MAEGANTrainer(Trainer):
     weight_decay = cfg.hyp.weight_decay
       
     self.cfg.hyp.add('lr', lr)
+    
+    no_decay, decay = {}, {}
+    for name, param in self.model.named_parameters():
+        if not param.requires_grad:
+            continue
 
-    param_groups = optim_factory.param_groups_weight_decay(self.model, weight_decay=weight_decay)
+        if param.ndim <= 1 or name.endswith(".bias"):
+            no_decay[name] = param
+        else:
+            decay[name] = param
+
+    gen_param_groups = [
+        {
+          "params": [param for k, param in no_decay.items() if "discriminate" not in k],
+          "weight_decay": 0.0
+        },
+        {
+          "params": [param for k, param in decay.items() if "discriminate" not in k],
+          "weight_decay": weight_decay
+        },
+    ]
     
-    self.optimizer = AdamW(param_groups, lr=lr, betas=(0.9, 0.95))
+    disc_param_groups = [
+        {"params": list(no_decay.values()), "weight_decay": 0.0},
+        {"params": list(decay.values()), "weight_decay": weight_decay},
+    ]
     
-    LOGGER.info(f"Optimizer: AdamW(lr={lr}, weight_decay={weight_decay})")
+    self.gen_optimizer = AdamW(gen_param_groups, lr=lr, betas=(0.9, 0.95))
+    self.optimizer = self.gen_optimizer
+    self.disc_optimizer = AdamW(disc_param_groups, lr=lr, betas=(0.9, 0.95))
+    
+    LOGGER.info(f"Generator Optimizer: {self.gen_optimizer}")
+    LOGGER.info(f"Disscriminator Optimizer: {self.disc_optimizer}")
     
     self.loss_scaler = NativeScaler()
-    LOGGER.info(self.optimizer)
 
   def train_one_epoch(self):
     self.model.train()
-    self.optimizer.zero_grad()
+    self.gen_optimizer.zero_grad()
+    self.disc_optimizer.zero_grad()
     header = 'Epoch [{}]: '.format(self.current_epoch)
     LOGGER.info(header)
 
@@ -325,11 +353,12 @@ class MAEGANTrainer(Trainer):
     start_time_one_epoch = time.time()
     for data_iter_step, data in enumerate(tqdm(self.train_dataloader)):
       if data_iter_step % accumulate_iter == 0:
-        lr_sched.adjust_learning_rate(self.optimizer, data_iter_step / len(self.train_dataloader) + self.current_epoch, self.cfg)
+        lr_sched.adjust_learning_rate(self.gen_optimizer, data_iter_step / len(self.train_dataloader) + self.current_epoch, self.cfg)
+        lr_sched.adjust_learning_rate(self.disc_optimizer, data_iter_step / len(self.train_dataloader) + self.current_epoch, self.cfg)
       
       data = data.to(self.device)
-    
-      with torch.cuda.amp.autocast(enabled=False):
+
+      with torch.cuda.amp.autocast(enabled=True):
         loss, _, _ = self.model(data)
         
       for k, v in loss.items():
@@ -337,17 +366,17 @@ class MAEGANTrainer(Trainer):
           print(f"{k} is {v.item()}, stopping training")
           sys.exit(1)
 
-      gen_loss = aw_loss(loss["mae_loss"], loss["adv_loss"], self.optimizer, self.model)
+      gen_loss = aw_loss(loss["mae_loss"], loss["adv_loss"], self.gen_optimizer, self.model)
       gen_loss_value = gen_loss.item()
       if not math.isfinite(gen_loss_value):
           print("Loss Generator is {}, stopping training".format(gen_loss_value))
           sys.exit(1)
 
       gen_loss /= accumulate_iter
-      self.loss_scaler(gen_loss, self.optimizer, parameters=self.model.parameters(),
+      self.loss_scaler(gen_loss, self.gen_optimizer, parameters=self.model.parameters(),
                     update_grad=(data_iter_step + 1) % accumulate_iter == 0, retain_graph = True)
       if (data_iter_step + 1) % accumulate_iter == 0:
-        self.optimizer.zero_grad()
+        self.gen_optimizer.zero_grad()
       
       with torch.cuda.amp.autocast(enabled=False):
         loss, _, _ = self.model(data)
@@ -362,12 +391,12 @@ class MAEGANTrainer(Trainer):
 
       loss["disc_loss"] /= accumulate_iter
       loss["mae_loss"] /= accumulate_iter
-      self.loss_scaler(loss["disc_loss"], self.optimizer, parameters=self.model.parameters(),
+      self.loss_scaler(loss["disc_loss"], self.disc_optimizer, parameters=self.model.parameters(),
                   update_grad=(data_iter_step + 1) % accumulate_iter == 0, retain_graph = True)
       if (data_iter_step + 1) % accumulate_iter == 0:
-          self.optimizer.zero_grad()
+          self.disc_optimizer.zero_grad()
       
-      lr = self.optimizer.param_groups[0]["lr"]
+      lr = self.gen_optimizer.param_groups[0]["lr"]
       self.metric_logger.update(
         {
           'train/loss': mae_loss_value, 

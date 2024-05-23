@@ -12,10 +12,10 @@ hyp:
   min_lr: 1.0e-6
   base_lr: 1.5e-4
   weight_decay: 0.001
-  gradient_accumulation_steps: 16
+  gradient_accumulation_steps: 4
 
 Model:
-  name: "mae_gan_vit_base_patch16_with_register"
+  name: "mae_vit_base_patch16_with_register"
   use_gan_loss: False
 
 Dataset:
@@ -23,7 +23,7 @@ Dataset:
   data_name: "Endoscopy"
   annotation_file: "./configs/pretrain.json"
   img_size: 224
-  batch_size: 16
+  batch_size: 64
   num_workers: 8
   pin_memory: True
   drop_last: True

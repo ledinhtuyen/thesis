@@ -14,10 +14,12 @@ from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 def build_transforms(input_size=224, is_train=False, meanstd={'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD}):    
     if is_train:
         transform = transforms.Compose([
-            transforms.RandomResizedCrop((input_size, input_size), scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+            # transforms.RandomResizedCrop((input_size, input_size), scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+            transforms.Resize((input_size, input_size), interpolation=3),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize(mean=meanstd["mean"], std=meanstd["std"])])
+            # transforms.Normalize(mean=meanstd["mean"], std=meanstd["std"]),
+        ])
     else:
         transform = transforms.Compose([
             transforms.Resize((input_size, input_size), interpolation=3),
