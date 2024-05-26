@@ -2,12 +2,12 @@ from mmseg.registry import DATASETS
 from mmseg.datasets import BaseSegDataset
 
 @DATASETS.register_module()
-class PraNet_Dataset(BaseSegDataset):
+class PublicDataset(BaseSegDataset): # Dataset train of PraNet
   METAINFO = dict(
-        classes=('Polyp',),
-        palette=[[255, 255, 255],])
+        classes=('Background', 'Polyp'),
+        palette=[[0, 0, 0], [255, 255, 255]])
   def __init__(self, **kwargs):
-    super(PraNet_Dataset, self).__init__(
+    super(PublicDataset, self).__init__(
       img_suffix='.png',
       seg_map_suffix='.png',
       **kwargs)

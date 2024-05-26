@@ -1,1 +1,3 @@
-from .pranet_dataset import *
+from .public_dataset import PublicDataset
+
+__all__ = ['PublicDataset']
