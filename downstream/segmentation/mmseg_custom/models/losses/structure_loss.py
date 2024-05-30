@@ -5,26 +5,6 @@ import torch.nn.functional as F
 from mmseg.registry import MODELS
 from mmseg.models.losses.utils import weighted_loss
 
-def _expand_onehot_labels(pred: torch.Tensor,
-                        target: torch.Tensor) -> torch.Tensor:
-    """Expand onehot labels to match the size of prediction.
-
-    Args:
-        pred (torch.Tensor): The prediction, has a shape (N, num_class, H, W).
-        target (torch.Tensor): The learning label of the prediction,
-            has a shape (N, H, W).
-
-    Returns:
-        torch.Tensor: The target after one-hot encoding,
-            has a shape (N, num_class, H, W).
-    """
-    num_classes = pred.shape[1]
-    one_hot_target = torch.clamp(target, min=0, max=num_classes)
-    one_hot_target = torch.nn.functional.one_hot(one_hot_target,
-                                                 num_classes + 1)
-    one_hot_target = one_hot_target[..., :num_classes].permute(0, 3, 1, 2)
-    return one_hot_target
-
 class FocalLossV1(nn.Module):
     
     def __init__(self,
@@ -56,9 +36,8 @@ class FocalLossV1(nn.Module):
 
 @weighted_loss
 def structure_loss(pred, mask, loss_type='bce', **kwargs):
-    mask = mask.float()
     weit = 1 + 5*torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    
+
     if loss_type == 'bce':
         wbce = F.binary_cross_entropy_with_logits(pred, mask, reduce='none')
         wbce = (weit*wbce).sum(dim=(2, 3)) / weit.sum(dim=(2, 3))
@@ -98,21 +77,17 @@ class StructureLoss(nn.Module):
                 reduction_override=None,
                 ignore_index=255,
                 **kwargs):
-        one_hot_target = target
-        if (pred.shape != target.shape):
-            one_hot_target = _expand_onehot_labels(pred, target)
-            
         assert reduction_override in (None, 'none', 'mean', 'sum')
         reduction = (
             reduction_override if reduction_override else self.reduction)
-
-        if ignore_index is not None:
-            num_classes = pred.shape[1]
-            pred = pred[:, torch.arange(num_classes) != ignore_index, :, :]
-            one_hot_target = one_hot_target[:, torch.arange(num_classes) != ignore_index, :, :]
-            assert pred.shape[1] != 0  # if the ignored index is the only class
         
-        loss = self.loss_weight * self.criterion(pred, one_hot_target, weight, reduction=reduction, avg_factor=avg_factor, loss_type=self.loss_type)
+        if pred.size(1) == 1:
+            assert target[target != ignore_index].max() <= 1, \
+            'For pred with shape [N, 1, H, W], its label must have at ' \
+            'most 2 classes'
+            target = target.unsqueeze(1)
+
+        loss = self.loss_weight * self.criterion(pred, target.float(), weight, reduction=reduction, avg_factor=avg_factor, loss_type=self.loss_type)
         return loss
 
     @property

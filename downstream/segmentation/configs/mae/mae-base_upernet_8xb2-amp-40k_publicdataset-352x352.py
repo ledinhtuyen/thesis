@@ -6,14 +6,14 @@ _base_ = [
 custom_imports = dict(imports=["mmseg_custom"])
 
 pretrained = "/home/s/tuyenld/mae/downstream/segmentation/runs/pretrainv2/mae_meta_register_norm_pix_img224_p16/weight/last.pth"
-crop_size = (512, 512)
+crop_size = (352, 352)
 data_preprocessor = dict(size=crop_size)
 model = dict(
     data_preprocessor=data_preprocessor,
     backbone=dict(
         _delete_=True,
         type='MaskedAutoencoderViT',
-        img_size=512,
+        img_size=352,
         patch_size=16,
         in_chans=3,
         embed_dim=768,

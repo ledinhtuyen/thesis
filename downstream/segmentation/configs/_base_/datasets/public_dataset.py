@@ -1,5 +1,6 @@
 # dataset settings
 dataset_type = 'PublicDataset'
+# img_scale = (352, 352)
 img_scale = (512, 512)
 
 albu_transforms = [
@@ -22,9 +23,9 @@ train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', reduce_zero_label=False),
     dict(type='Resize', scale=img_scale, keep_ratio=False),
-    dict(type='RandomFlip', prob=[0.5, 0.5], direction=['horizontal', 'vertical']),
-    dict(type='PhotoMetricDistortion'),
-    dict(type='Albu', transforms=albu_transforms),
+    # dict(type='RandomFlip', prob=[0.5, 0.5], direction=['horizontal', 'vertical']),
+    # dict(type='PhotoMetricDistortion'),
+    # dict(type='Albu', transforms=albu_transforms),
     dict(type='PackSegInputs')
 ]
 test_pipeline = [
@@ -35,22 +36,23 @@ test_pipeline = [
     dict(type='LoadAnnotations', reduce_zero_label=False),
     dict(type='PackSegInputs')
 ]
-img_ratios = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]
-tta_pipeline = [
-    dict(type='LoadImageFromFile', backend_args=None),
-    dict(
-        type='TestTimeAug',
-        transforms=[
-            [
-                dict(type='Resize', scale_factor=r, keep_ratio=True)
-                for r in img_ratios
-            ],
-            [
-                dict(type='RandomFlip', prob=0., direction='horizontal'),
-                dict(type='RandomFlip', prob=1., direction='horizontal')
-            ], [dict(type='LoadAnnotations')], [dict(type='PackSegInputs')]
-        ])
-]
+
+# img_ratios = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75]
+# tta_pipeline = [
+#     dict(type='LoadImageFromFile', backend_args=None),
+#     dict(
+#         type='TestTimeAug',
+#         transforms=[
+#             [
+#                 dict(type='Resize', scale_factor=r, keep_ratio=True)
+#                 for r in img_ratios
+#             ],
+#             [
+#                 dict(type='RandomFlip', prob=0., direction='horizontal'),
+#                 dict(type='RandomFlip', prob=1., direction='horizontal')
+#             ], [dict(type='LoadAnnotations')], [dict(type='PackSegInputs')]
+#         ])
+# ]
 
 train_dataloader = dict(
     batch_size=4,
@@ -59,9 +61,9 @@ train_dataloader = dict(
     sampler=dict(type='InfiniteSampler', shuffle=True),
     dataset=dict(
         type=dataset_type,
-        ann_file="../data/train_public_dataset.txt",
-        data_prefix=dict(img_path="/home/s/tuyenld/DATA/public_dataset/TrainDataset/image", 
-                         seg_map_path="/home/s/tuyenld/DATA/public_dataset/TrainDataset/masks"),
+        data_prefix=dict(
+            img_path="/home/s/tuyenld/DATA/public_dataset/TrainDataset/image", 
+            seg_map_path="/home/s/tuyenld/DATA/public_dataset/TrainDataset/masks"),
         pipeline=train_pipeline))
 val_dataloader = dict(
     batch_size=1,
@@ -71,11 +73,10 @@ val_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_prefix=dict(
-            ann_file="../data/test_CVC-ClinicDB.txt",
-            img_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ClinicDB/images',
-            seg_map_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ClinicDB/masks'),
+            img_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ColonDB/images',
+            seg_map_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ColonDB/masks'),
         pipeline=test_pipeline))
 test_dataloader = val_dataloader
 
-val_evaluator = dict(type='IoUMetric', iou_metrics=['mIoU', 'mDice'])
+val_evaluator = dict(type='IoU_Dice_Metric', metrics=['mIoU', 'mDice'], prefix="val")
 test_evaluator = val_evaluator

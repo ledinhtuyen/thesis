@@ -5,7 +5,7 @@ from mmseg.datasets import BaseSegDataset
 class PublicDataset(BaseSegDataset): # Dataset train of PraNet
   METAINFO = dict(
         classes=('Background', 'Polyp'),
-        palette=[[0, 0, 0], [255, 255, 255]])
+        palette=[[0, 0, 0], [111, 78, 55]])
   def __init__(self, **kwargs):
     super(PublicDataset, self).__init__(
       img_suffix='.png',

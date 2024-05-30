@@ -20,7 +20,7 @@ def get_layer_id_for_vit(var_name, max_layer_id):
     """
 
     if var_name in ('backbone.cls_token', 'backbone.mask_token',
-                    'backbone.pos_embed', 'backbone.register_token'):
+                    'backbone.pos_embed', 'backbone.register_tokens'):
         return 0
     elif var_name.startswith('backbone.patch_embed'):
         return 0
@@ -63,7 +63,7 @@ class LearningRateDecayOptimizerConstructor_Custom(DefaultOptimWrapperConstructo
             if not param.requires_grad:
                 continue  # frozen weights
             if len(param.shape) == 1 or name.endswith('.bias') or name in (
-                    'pos_embed', 'cls_token', 'register_token'):
+                    'pos_embed', 'cls_token', 'register_tokens'):
                 group_name = 'no_decay'
                 this_weight_decay = 0.
             else:
