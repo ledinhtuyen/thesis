@@ -12,10 +12,11 @@ from mmengine.utils import mkdir_or_exist
 from PIL import Image
 from prettytable import PrettyTable
 
-from mmseg.registry import METRICS
+from mmseg.registry import METRICS, EVALUATOR
 
 @METRICS.register_module()
-class IoU_Dice_Metric(BaseMetric):
+@EVALUATOR.register_module()
+class IoUDiceMetricForBinarySegmentation(BaseMetric):
     def __init__(self,
                 ignore_index: int = 255,
                 metrics: List[str] = ['mIoU', 'mDice'],
@@ -49,10 +50,10 @@ class IoU_Dice_Metric(BaseMetric):
         """
         num_classes = len(self.dataset_meta['classes'])
         for data_sample in data_samples:
-            pred_label = data_sample['pred_sem_seg']['data'].squeeze()
+            pred_label = data_sample.pred_sem_seg.data.squeeze()
             # format_only always for test dataset without ground truth
             if not self.format_only:
-                label = data_sample['gt_sem_seg']['data'].squeeze().to(
+                label = data_sample.gt_sem_seg.data.squeeze().to(
                     pred_label)
                 self.results.append(
                     self.intersect_and_union(pred_label, label, num_classes,
@@ -93,21 +94,100 @@ class IoU_Dice_Metric(BaseMetric):
             torch.Tensor: The prediction histogram on all classes.
             torch.Tensor: The ground truth histogram on all classes.
         """
+
+        mask = (label != ignore_index)
+        pred_label = pred_label[mask]
+        label = label[mask]
+
+        intersect = pred_label[pred_label == label]
+        area_intersect = torch.histc(
+            intersect.float(), bins=(num_classes), min=0,
+            max=num_classes - 1).cpu()
+        area_pred_label = torch.histc(
+            pred_label.float(), bins=(num_classes), min=0,
+            max=num_classes - 1).cpu()
+        area_label = torch.histc(
+            label.float(), bins=(num_classes), min=0,
+            max=num_classes - 1).cpu()
+        area_union = area_pred_label + area_label - area_intersect
+        return area_intersect, area_union, area_pred_label, area_label
+    
+    def compute_metrics(self, results: List) -> Dict:
+        """Compute the metrics from processed results.
+
+        Args:
+            results (list): The processed results of each batch.
+
+        Returns:
+            Dict[str, float]: The computed metrics. The keys are the names of
+                the metrics, and the values are corresponding results. The key
+                mainly includes mIoU, mDice, mPrecision, mRecall.
+        """
+        logger: MMLogger = MMLogger.get_current_instance()
+        if self.format_only:
+            logger.info(f'results are saved to {osp.dirname(self.output_dir)}')
+            return OrderedDict()
         
+        mPrecision = 0
+        mRecall = 0
+        mDice = 0
+        mIoU = 0
+        for result in results:
+            intersect_, union_, pred_label_, label_ = result
+            intersect, union, pred_label, label = intersect_[1], union_[1], pred_label_[1], label_[1]
+            mPrecision += intersect / (pred_label + 1e-7)
+            mRecall += intersect / (label + 1e-7)
+            mDice += 2 * intersect / (pred_label + label + 1e-7)
+            mIoU += intersect / (union + 1e-7)
 
-        # mask = (label != ignore_index)
-        # pred_label = pred_label[mask]
-        # label = label[mask]
+        num_samples = len(results)
+        mPrecision = mPrecision / num_samples
+        mRecall = mRecall / num_samples
+        mDice = mDice / num_samples
+        mIoU = mIoU / num_samples
+        
+        ret_metrics = OrderedDict()
+        
+        for metric in self.metrics:
+            if metric == 'mDice':
+                ret_metrics["mDice"] = mDice
+            elif metric == 'mIoU':
+                ret_metrics["mIoU"] = mIoU
+            else:
+                raise ValueError(f'Invalid metric name {metric}')
+            
+            ret_metrics["mPrecision"] = mPrecision
+            ret_metrics["mRecall"] = mRecall
+            
+        ret_metrics = {
+            metric: value.numpy()
+            for metric, value in ret_metrics.items()
+        }
+        
+        if self.nan_to_num is not None:
+            for metric, value in ret_metrics.items():
+                ret_metrics[metric] = np.nan_to_num(value, nan=self.nan_to_num)
+                
+        class_names = self.dataset_meta['classes'][1]  # exclude background
+        
+        # summary table
+        
+        ret_metrics_class = OrderedDict({
+            ret_metric: np.round(ret_metric_value * 100, 2)
+            for ret_metric, ret_metric_value in ret_metrics.items()
+        })
+        
+        ret_metrics_class.update({'Class': class_names})
+        ret_metrics_class.move_to_end('Class', last=False)
+        class_table_data = PrettyTable()
+        for key, val in ret_metrics_class.items():
+            class_table_data.add_column(key, [val])
 
-        # intersect = pred_label[pred_label == label]
-        # area_intersect = torch.histc(
-        #     intersect.float(), bins=(num_classes), min=0,
-        #     max=num_classes - 1).cpu()
-        # area_pred_label = torch.histc(
-        #     pred_label.float(), bins=(num_classes), min=0,
-        #     max=num_classes - 1).cpu()
-        # area_label = torch.histc(
-        #     label.float(), bins=(num_classes), min=0,
-        #     max=num_classes - 1).cpu()
-        # area_union = area_pred_label + area_label - area_intersect
-        # return area_intersect, area_union, area_pred_label, area_label
+        print_log('per class results:', logger)
+        print_log('\n' + class_table_data.get_string(), logger=logger)
+
+        ret_metrics_summary = OrderedDict({
+                    ret_metric: np.round(np.nanmean(ret_metric_value) * 100, 2)
+                    for ret_metric, ret_metric_value in ret_metrics.items()
+                })
+        return ret_metrics_summary

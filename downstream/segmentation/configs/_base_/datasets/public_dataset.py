@@ -73,10 +73,10 @@ val_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_prefix=dict(
-            img_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ColonDB/images',
-            seg_map_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ColonDB/masks'),
+            img_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ClinicDB/images',
+            seg_map_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ClinicDB/masks'),
         pipeline=test_pipeline))
 test_dataloader = val_dataloader
 
-val_evaluator = dict(type='IoU_Dice_Metric', metrics=['mIoU', 'mDice'], prefix="val")
+val_evaluator = dict(type='IoUDiceMetricForBinarySegmentation', metrics=['mIoU', 'mDice'], prefix="val")
 test_evaluator = val_evaluator

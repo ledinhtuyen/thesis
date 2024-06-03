@@ -1,1 +1,2 @@
-from .iou_dice_metric import IoU_Dice_Metric
+from .iou_dice_metric import IoUDiceMetricForBinarySegmentation
+__all__ = ['IoUDiceMetricForBinarySegmentation']

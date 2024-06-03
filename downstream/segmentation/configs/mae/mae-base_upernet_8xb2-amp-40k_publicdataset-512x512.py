@@ -30,7 +30,7 @@ model = dict(
         in_channels=[768, 768, 768, 768], 
         num_classes=2, # 2 for binary classification
         out_channels=1, # 1 for binary classification
-        threshold=0.3, # threshold for binary classification
+        threshold=0.8, # threshold for binary classification
         loss_decode=[
             # dict(type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
             # dict(type='DiceLoss', use_sigmoid=True, loss_weight=1.0),
@@ -43,7 +43,7 @@ model = dict(
         in_channels=768, 
         num_classes=2,  # 2 for binary classification
         out_channels=1, # 1 for binary classification
-        threshold=0.3, # threshold for binary classification
+        threshold=0.8, # threshold for binary classification
         loss_decode=[
             # dict(type='CrossEntropyLoss', use_sigmoid=True, loss_weight=0.4),
             # dict(type='DiceLoss', use_sigmoid=True, loss_weight=0.4),
@@ -59,7 +59,7 @@ optim_wrapper = dict(
     type='OptimWrapper',
     optimizer=dict(
         type='AdamW', lr=1e-4, betas=(0.9, 0.999), weight_decay=0.05),
-    paramwise_cfg=dict(num_layers=12, layer_decay_rate=0.65),
+    paramwise_cfg=dict(num_layers=12, layer_decay_rate=0.95),
     constructor='LayerDecayOptimizerConstructor_Custom',
     accumulative_counts=16
 )
