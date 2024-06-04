@@ -18,6 +18,35 @@ from timm.models.vision_transformer import PatchEmbed, Block
 
 from util.pos_embed import get_2d_sincos_pos_embed
 
+import numpy as np
+
+class ConvEmbed(nn.Module):
+    """
+    3x3 Convolution stems for ViT following ViTC models
+    """
+
+    def __init__(self, channels, strides, img_size=224, in_chans=3, batch_norm=True):
+        super().__init__()
+        # Build the stems
+        stem = []
+        channels = [in_chans] + channels
+        for i in range(len(channels) - 2):
+            stem += [nn.Conv2d(channels[i], channels[i+1], kernel_size=3,
+                               stride=strides[i], padding=1, bias=(not batch_norm))]
+            if batch_norm:
+                stem += [nn.BatchNorm2d(channels[i+1])]
+            stem += [nn.ReLU(inplace=True)]
+        stem += [nn.Conv2d(channels[-2], channels[-1], kernel_size=1, stride=strides[-1])]
+        self.stem = nn.Sequential(*stem)
+
+        # Comptute the number of patches
+        stride_prod = int(np.prod(strides))
+        self.num_patches = (img_size[0] // stride_prod)**2
+        self.patch_size = (stride_prod, stride_prod)
+
+    def forward(self, x):
+        p = self.stem(x)
+        return p.flatten(2).transpose(1, 2)
 
 class MaskedAutoencoderViT(nn.Module):
     """ Masked Autoencoder with VisionTransformer backbone
@@ -25,17 +54,21 @@ class MaskedAutoencoderViT(nn.Module):
     def __init__(self, img_size=224, patch_size=16, in_chans=3,
                  embed_dim=1024, depth=24, num_heads=16,
                  decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
-                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False, num_register_tokens=0):
+                 mlp_ratio=4., norm_layer=nn.LayerNorm, norm_pix_loss=False, num_register_tokens=0, use_conv_stem=False):
         super().__init__()
         
         self.img_size = img_size
         self.patch_size = patch_size
         self.grid_size = img_size // patch_size
         self.num_register_tokens = num_register_tokens
+        self.use_conv_stem = use_conv_stem
 
         # --------------------------------------------------------------------------
         # MAE encoder specifics
-        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        if use_conv_stem:
+            self.patch_embed = ConvEmbed(channels=[48, 96, 192, 384, embed_dim], strides=[2, 2, 2, 2, 1], img_size=(img_size, img_size), batch_norm=False)
+        else:
+            self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -93,8 +126,9 @@ class MaskedAutoencoderViT(nn.Module):
         self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
 
         # initialize patch_embed like nn.Linear (instead of nn.Conv2d)
-        w = self.patch_embed.proj.weight.data
-        torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        if self.use_conv_stem == False:
+            w = self.patch_embed.proj.weight.data
+            torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
 
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
         torch.nn.init.normal_(self.cls_token, std=.02)
@@ -289,6 +323,14 @@ def mae_vit_base_patch16_dec512d8b_with_register(**kwargs):
         mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), num_register_tokens=4, **kwargs)
     return model
 
+def mae_vit_base_patch16_dec512d8b_with_register_convstem(**kwargs):
+    model = MaskedAutoencoderViT(
+        patch_size=16, embed_dim=768, depth=12, num_heads=12,
+        decoder_embed_dim=512, decoder_depth=8, decoder_num_heads=16,
+        mlp_ratio=4, norm_layer=partial(nn.LayerNorm, eps=1e-6), num_register_tokens=4, 
+        use_conv_stem=True,**kwargs)
+    return model
+
 def mae_vit_large_patch16_dec512d8b(**kwargs):
     model = MaskedAutoencoderViT(
         patch_size=16, embed_dim=1024, depth=24, num_heads=16,
@@ -314,6 +356,7 @@ def mae_vit_huge_patch14_dec512d8b(**kwargs):
 # set recommended archs
 mae_vit_base_patch16 = mae_vit_base_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
 mae_vit_base_patch16_with_register = mae_vit_base_patch16_dec512d8b_with_register
+mae_vit_base_patch16_with_register_convstem = mae_vit_base_patch16_dec512d8b_with_register_convstem
 mae_vit_large_patch16_with_register = mae_vit_large_patch16_dec512d8b_with_register
 mae_vit_large_patch16 = mae_vit_large_patch16_dec512d8b  # decoder: 512 dim, 8 blocks
 mae_vit_huge_patch14 = mae_vit_huge_patch14_dec512d8b  # decoder: 512 dim, 8 blocks
