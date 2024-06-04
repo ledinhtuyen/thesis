@@ -38,6 +38,7 @@ class Trainer:
     self.cfg = cfg
     self.callbacks = callbacks
     self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    LOGGER.info(colorstr(f"Device: {self.device}"))
     self.current_epoch = 0
     self.best_loss = inf
     self.use_gan_loss = cfg.Model.use_gan_loss
@@ -248,8 +249,14 @@ class Trainer:
     for epoch in range(self.current_epoch, self.epochs):
       self.current_epoch = epoch
       self.train_one_epoch()
-      if self.current_epoch % self.save_period == 0:  
+
+      if self.current_epoch % self.cfg.save_ckpt_freq == 0:
+        self.save_checkpoint(f'epoch_{self.current_epoch}.pth')
+
+      if self.current_epoch % self.save_period == 0:
+        # Save last checkpoint
         self.save_checkpoint()
+
       self.test_one_epoch()
       LOGGER.info(f"Averaged stats: {self.metric_logger}")
       
