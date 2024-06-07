@@ -73,8 +73,8 @@ val_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_prefix=dict(
-            img_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ClinicDB/images',
-            seg_map_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ClinicDB/masks'),
+            img_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/ETIS-LaribPolypDB/images',
+            seg_map_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/ETIS-LaribPolypDB/masks'),
         pipeline=test_pipeline))
 test_dataloader = val_dataloader
 

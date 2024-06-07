@@ -11,21 +11,21 @@ save_ckpt_freq: 50
 
 hyp:
   min_lr: 1.0e-6
-  base_lr: 1.0e-3
+  base_lr: 1.5e-4
   weight_decay: 0.05
-  gradient_accumulation_steps: 4
+  gradient_accumulation_steps: 8
 
 Model:
-  name: "mae_vit_large_patch16_with_register"
+  name: "mae_vit_base_patch16_with_register_convstem"
   use_gan_loss: False
 
 Dataset:
-  prefix_path: "/mnt/tuyenld/data/endoscopy"
+  prefix_path: "../../DATA"
   data_name: "Endoscopy"
   annotation_file: "./configs/pretrain.json"
   img_size: 224
-  batch_size: 64
-  num_workers: 24
+  batch_size: 32
+  num_workers: 8
   pin_memory: True
   drop_last: True
   train_json_file: "./configs/train.json"

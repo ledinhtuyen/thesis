@@ -75,6 +75,34 @@ def get_1d_sincos_pos_embed_from_grid(embed_dim, pos):
 
     emb = np.concatenate([emb_sin, emb_cos], axis=1)  # (M, D)
     return emb
+
+class ConvEmbed(nn.Module):
+    """
+    3x3 Convolution stems for ViT following ViTC models
+    """
+
+    def __init__(self, channels, strides, img_size=224, in_chans=3, batch_norm=True):
+        super().__init__()
+        # Build the stems
+        stem = []
+        channels = [in_chans] + channels
+        for i in range(len(channels) - 2):
+            stem += [nn.Conv2d(channels[i], channels[i+1], kernel_size=3,
+                               stride=strides[i], padding=1, bias=(not batch_norm))]
+            if batch_norm:
+                stem += [nn.BatchNorm2d(channels[i+1])]
+            stem += [nn.ReLU(inplace=True)]
+        stem += [nn.Conv2d(channels[-2], channels[-1], kernel_size=1, stride=strides[-1])]
+        self.stem = nn.Sequential(*stem)
+
+        # Comptute the number of patches
+        stride_prod = int(np.prod(strides))
+        self.num_patches = (img_size[0] // stride_prod)**2
+        self.patch_size = (stride_prod, stride_prod)
+
+    def forward(self, x):
+        p = self.stem(x)
+        return p.flatten(2).transpose(1, 2)
   
 from mmseg.registry import MODELS
 
@@ -86,7 +114,9 @@ class MaskedAutoencoderViT(nn.Module):
                  embed_dim=768, depth=12, num_heads=12,
                  mlp_ratio=4., norm_layer=nn.LayerNorm, 
                  num_register_tokens=4, out_indices=-1, init_cfg=None, final_norm=True,
-                 interpolate_mode='bicubic', **kwargs):
+                 interpolate_mode='bicubic', 
+                 use_conv_stem=False, output_cls_token=False,
+                 **kwargs):
         super().__init__()
         
         self.img_size = img_size
@@ -97,10 +127,15 @@ class MaskedAutoencoderViT(nn.Module):
         self.init_cfg = init_cfg
         self.final_norm = final_norm
         self.interpolate_mode = interpolate_mode
+        self.use_conv_stem = use_conv_stem
+        self.output_cls_token = output_cls_token
 
         # --------------------------------------------------------------------------
         # MAE encoder specifics
-        self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
+        if self.use_conv_stem:
+            self.patch_embed = ConvEmbed(channels=[48, 96, 192, 384, embed_dim], strides=[2, 2, 2, 2, 1], img_size=(img_size, img_size), batch_norm=False)
+        else:
+            self.patch_embed = PatchEmbed(img_size, patch_size, in_chans, embed_dim)
         num_patches = self.patch_embed.num_patches
 
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
@@ -128,12 +163,10 @@ class MaskedAutoencoderViT(nn.Module):
         pos_embed = get_2d_sincos_pos_embed(self.pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
         self.pos_embed.data.copy_(torch.from_numpy(pos_embed).float().unsqueeze(0))
 
-        decoder_pos_embed = get_2d_sincos_pos_embed(self.decoder_pos_embed.shape[-1], int(self.patch_embed.num_patches**.5), cls_token=True)
-        self.decoder_pos_embed.data.copy_(torch.from_numpy(decoder_pos_embed).float().unsqueeze(0))
-
         # initialize patch_embed like nn.Linear (instead of nn.Conv2d)
-        w = self.patch_embed.proj.weight.data
-        torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
+        if self.use_conv_stem:
+            w = self.patch_embed.proj.weight.data
+            torch.nn.init.xavier_uniform_(w.view([w.shape[0], -1]))
 
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
         torch.nn.init.normal_(self.cls_token, std=.02)
@@ -219,6 +252,11 @@ class MaskedAutoencoderViT(nn.Module):
         return pos_embed
 
     def forward_encoder(self, x):
+        outs = []
+        
+        if -1 in self.out_indices:
+            outs.append(x)
+        
         # embed patches
         x = self.patch_embed(x)
 
@@ -239,8 +277,7 @@ class MaskedAutoencoderViT(nn.Module):
                 ),
                 dim=1,
             )
-
-        outs = []
+        
         # apply Transformer blocks
         for i, blk in enumerate(self.blocks):
             x = blk(x)
@@ -253,6 +290,8 @@ class MaskedAutoencoderViT(nn.Module):
                 
                 out = out.reshape(B, self.grid_size, self.grid_size,
                                   C).permute(0, 3, 1, 2).contiguous()
+                if self.output_cls_token:
+                    out = [out, x[:, 0]]
                 outs.append(out)
                 
         return tuple(outs)
