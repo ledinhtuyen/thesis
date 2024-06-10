@@ -16,15 +16,15 @@ hyp:
   gradient_accumulation_steps: 8
 
 Model:
-  name: "mae_vit_base_patch16_with_register_convstem"
+  name: "mae_vit_large_patch16_with_register"
   use_gan_loss: False
 
 Dataset:
-  prefix_path: "../../DATA"
+  prefix_path: "../../data/endoscopy"
   data_name: "Endoscopy"
   annotation_file: "./configs/pretrain.json"
   img_size: 224
-  batch_size: 32
+  batch_size: 64
   num_workers: 8
   pin_memory: True
   drop_last: True

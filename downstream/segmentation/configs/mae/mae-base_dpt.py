@@ -5,7 +5,7 @@ _base_ = [
 
 custom_imports = dict(imports=["mmseg_custom"])
 
-pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/mae_meta_register_norm_pix_img224_p16/weight/last.pth"
+pretrained = "/mnt/tuyenld/mae/pretrain/runs/pretrainv2/mae_meta_register_norm_pix_img224_p16/weight/last.pth"
 crop_size = (512, 512)
 data_preprocessor = dict(size=crop_size)
 model = dict(
@@ -21,7 +21,7 @@ model = dict(
         num_heads=12,
         mlp_ratio=4,
         num_register_tokens=4,
-        out_indices=[2, 5, 8, 11],
+        out_indices=[3, 5, 7, 11],
         final_norm=True,
         interpolate_mode='bicubic',
         use_conv_stem=False,
@@ -32,7 +32,7 @@ model = dict(
         in_channels=[768, 768, 768, 768], 
         num_classes=2, # 2 for binary classification
         out_channels=1, # 1 for binary classification
-        threshold=0.8, # threshold for binary classification
+        threshold=0.5, # threshold for binary classification
         loss_decode=[
             # dict(type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
             # dict(type='DiceLoss', use_sigmoid=True, loss_weight=1.0),
@@ -60,7 +60,7 @@ optim_wrapper = dict(
     _delete_=True,
     type='OptimWrapper',
     optimizer=dict(
-        type='AdamW', lr=1e-5, betas=(0.9, 0.999), weight_decay=0.01),
+        type='AdamW', lr=1e-4, betas=(0.9, 0.999), weight_decay=0.01),
     paramwise_cfg=dict(
         custom_keys={
             'pos_embed': dict(decay_mult=0.),
@@ -75,7 +75,7 @@ optim_wrapper = dict(
 
 param_scheduler = [
     dict(
-        type='LinearLR', start_factor=1e-8, by_epoch=False, begin=0, end=1500),
+        type='LinearLR', start_factor=1e-6, by_epoch=False, begin=0, end=1500),
     dict(
         type='PolyLR',
         eta_min=0,

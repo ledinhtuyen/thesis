@@ -61,17 +61,26 @@ class IoUDiceMetricForBinarySegmentation(BaseMetric):
             # format_result
             if self.output_dir is not None:
                 basename = osp.splitext(osp.basename(
-                    data_sample['img_path']))[0]
+                    data_sample.img_path))[0]
                 png_filename = osp.abspath(
                     osp.join(self.output_dir, f'{basename}.png'))
+
+                label_mask = label.cpu().numpy()
                 output_mask = pred_label.cpu().numpy()
                 # The index range of official ADE20k dataset is from 0 to 150.
                 # But the index range of output is from 0 to 149.
                 # That is because we set reduce_zero_label=True.
                 if data_sample.get('reduce_zero_label', False):
                     output_mask = output_mask + 1
-                output = Image.fromarray(output_mask.astype(np.uint8))
-                output.save(png_filename)
+                
+                label_mask *= 255
+                output_mask *= 255
+
+                label_mask = Image.fromarray(label_mask.astype(np.uint8))
+                output_mask = Image.fromarray(output_mask.astype(np.uint8))
+                
+                label_mask.save(png_filename.replace('.png', '_gt.png'))
+                output_mask.save(png_filename)
 
     @staticmethod
     def intersect_and_union(pred_label: torch.tensor, label: torch.tensor,

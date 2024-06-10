@@ -1,7 +1,7 @@
 # dataset settings
 dataset_type = 'PublicDataset'
-# img_scale = (352, 352)
-img_scale = (512, 512)
+img_scale = (352, 352)
+# img_scale = (512, 512)
 
 albu_transforms = [
     dict(type='ShiftScaleRotate', p=0.3, shift_limit=0.0625, scale_limit=0.1, rotate_limit=45),
@@ -30,10 +30,10 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadImageFromFile'),
-    dict(type='Resize', scale=img_scale, keep_ratio=False),
     # add loading annotation after ``Resize`` because ground truth
     # does not need to do resize data transform
     dict(type='LoadAnnotations', reduce_zero_label=False),
+    dict(type='Resize', scale=img_scale, keep_ratio=False),
     dict(type='PackSegInputs')
 ]
 
@@ -62,8 +62,8 @@ train_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_prefix=dict(
-            img_path="/home/s/tuyenld/DATA/public_dataset/TrainDataset/image", 
-            seg_map_path="/home/s/tuyenld/DATA/public_dataset/TrainDataset/masks"),
+            img_path="/mnt/tuyenld/data/endoscopy/public_dataset/TrainDataset/image", 
+            seg_map_path="/mnt/tuyenld/data/endoscopy/public_dataset/TrainDataset/masks"),
         pipeline=train_pipeline))
 val_dataloader = dict(
     batch_size=1,
@@ -73,10 +73,15 @@ val_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_prefix=dict(
-            img_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/ETIS-LaribPolypDB/images',
-            seg_map_path='/home/s/tuyenld/DATA/public_dataset/TestDataset/ETIS-LaribPolypDB/masks'),
+            img_path='/mnt/tuyenld/data/endoscopy/public_dataset/TestDataset/ETIS-LaribPolypDB/images',
+            seg_map_path='/mnt/tuyenld/data/endoscopy//public_dataset/TestDataset/ETIS-LaribPolypDB/masks'),
         pipeline=test_pipeline))
 test_dataloader = val_dataloader
 
-val_evaluator = dict(type='IoUDiceMetricForBinarySegmentation', metrics=['mIoU', 'mDice'], prefix="val")
+val_evaluator = dict(
+    type='IoUDiceMetricForBinarySegmentation', 
+    metrics=['mIoU', 'mDice'], 
+    prefix="val",
+    output_dir="eval_results",
+)
 test_evaluator = val_evaluator

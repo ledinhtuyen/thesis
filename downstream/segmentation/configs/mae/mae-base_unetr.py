@@ -5,7 +5,7 @@ _base_ = [
 
 custom_imports = dict(imports=["mmseg_custom"])
 
-pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/mae_meta_register_norm_pix_img224_p16/weight/last.pth"
+pretrained = "../../pretrain/runs/pretrainv2/mae_meta_register_unnorm_pix_img224_p16_no_randomresizecrop/weight/last.pth"
 crop_size = (512, 512)
 data_preprocessor = dict(size=crop_size)
 model = dict(
@@ -31,7 +31,7 @@ model = dict(
     decode_head=dict(
         num_classes=2, # 2 for binary classification
         out_channels=1, # 1 for binary classification
-        threshold=0.3, # threshold for binary classification
+        threshold=0.5, # threshold for binary classification
         loss_decode=[
             # dict(type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0),
             # dict(type='DiceLoss', use_sigmoid=True, loss_weight=1.0),
@@ -74,7 +74,7 @@ optim_wrapper = dict(
 
 param_scheduler = [
     dict(
-        type='LinearLR', start_factor=1e-8, by_epoch=False, begin=0, end=1500),
+        type='LinearLR', start_factor=1e-6, by_epoch=False, begin=0, end=1500),
     dict(
         type='PolyLR',
         eta_min=0,

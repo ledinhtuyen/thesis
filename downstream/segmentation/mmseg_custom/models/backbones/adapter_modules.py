@@ -4,8 +4,12 @@ from functools import partial
 import torch
 import torch.nn as nn
 import torch.utils.checkpoint as cp
-from ops.modules import MSDeformAttn
 from timm.models.layers import DropPath
+
+try:
+    from ops.deformable_attention.modules import MSDeformAttn
+except:
+    print("Please install MSDeformAttn if you want to use ViT-Adapter")
 
 _logger = logging.getLogger(__name__)
 
@@ -194,8 +198,10 @@ class InteractionBlock(nn.Module):
 class InteractionBlockWithCls(nn.Module):
     def __init__(self, dim, num_heads=6, n_points=4, norm_layer=partial(nn.LayerNorm, eps=1e-6),
                  drop=0., drop_path=0., with_cffn=True, cffn_ratio=0.25, init_values=0.,
-                 deform_ratio=1.0, extra_extractor=False, with_cp=False):
+                 deform_ratio=1.0, extra_extractor=False, with_cp=False, num_prefix_tokens=1):
         super().__init__()
+        
+        self.num_prefix_tokens = num_prefix_tokens
 
         self.injector = Injector(dim=dim, n_levels=3, num_heads=num_heads, init_values=init_values,
                                  n_points=n_points, norm_layer=norm_layer, deform_ratio=deform_ratio,
@@ -219,8 +225,8 @@ class InteractionBlockWithCls(nn.Module):
                           level_start_index=deform_inputs1[2])
         x = torch.cat((cls, x), dim=1)
         for idx, blk in enumerate(blocks):
-            x = blk(x, H, W)
-        cls, x = x[:, :1, ], x[:, 1:, ]
+            x = blk(x)
+        cls, x = x[:, :self.num_prefix_tokens, ], x[:, self.num_prefix_tokens:, ]
         c = self.extractor(query=c, reference_points=deform_inputs2[0],
                            feat=x, spatial_shapes=deform_inputs2[1],
                            level_start_index=deform_inputs2[2], H=H, W=W)
