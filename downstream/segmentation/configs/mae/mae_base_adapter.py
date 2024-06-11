@@ -74,7 +74,7 @@ optim_wrapper = dict(
     _delete_=True,
     type='OptimWrapper',
     optimizer=dict(
-        type='AdamW', lr=2e-5, betas=(0.9, 0.999), weight_decay=0.05),
+        type='AdamW', lr=1e-3, betas=(0.9, 0.999), weight_decay=0.05),
     # paramwise_cfg=dict(
     #     custom_keys={
     #         'pos_embed': dict(decay_mult=0.),
@@ -82,14 +82,14 @@ optim_wrapper = dict(
     #         'norm': dict(decay_mult=0.),
     #         'register_tokens': dict(decay_mult=0.),
     #     }),
-    paramwise_cfg=dict(num_layers=24, layer_decay_rate=0.9),
+    paramwise_cfg=dict(num_layers=12, layer_decay_rate=0.9),
     constructor='LayerDecayOptimizerConstructor_Adapter',
     # accumulative_counts=16
 )
 
 param_scheduler = [
     dict(
-        type='LinearLR', start_factor=1e-7, by_epoch=False, begin=0, end=1500),
+        type='LinearLR', start_factor=1e-6, by_epoch=False, begin=0, end=1500),
     dict(
         type='PolyLR',
         eta_min=0,

@@ -236,9 +236,6 @@ class MaskedAutoencoderViT(nn.Module):
             nn.init.constant_(m.weight, 1.0)
 
     def init_weights(self, pretrained=None):
-        if pretrained is not None:
-            print(f"Load pretrained model from: {pretrained}")
-
         self.apply(self._init_weights)
 
         if (
