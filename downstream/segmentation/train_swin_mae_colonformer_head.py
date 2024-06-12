@@ -47,8 +47,8 @@ class Dataset(torch.utils.data.Dataset):
             image = augmented['image']
             mask = augmented['mask']
         else:
-            image = cv2.resize(image, (352, 352))
-            mask = cv2.resize(mask, (352, 352)) 
+            image = cv2.resize(image, (448, 448))
+            mask = cv2.resize(mask, (448, 448)) 
 
         image = image.astype('float32') / 255
         image = image.transpose((2, 0, 1))
@@ -157,7 +157,7 @@ def parse_args():
     parser.add_argument('--test_batchsize', type=int,
                         default=64, help='test batch size')
     parser.add_argument('--init_trainsize', type=int,
-                        default=352, help='training dataset size')
+                        default=448, help='training dataset size')
     parser.add_argument('--clip', type=float,
                         default=0.5, help='gradient clipping margin')
     parser.add_argument('--train_path', type=str,
@@ -198,7 +198,7 @@ def train(train_loader,
     print_log(f"Training on epoch {epoch}", logger=logging.getLogger())
     model.train()
     # ---- multi-scale training ----
-    size_rates = [0.65, 0.75, 1, 1.15, 1.25, 1.5]
+    # size_rates = [0.75, 1, 1.25]
     loss_record = AvgMeter()
     dice, iou = AvgMeter(), AvgMeter()
     total_step = len(train_loader)
@@ -214,43 +214,44 @@ def train(train_loader,
             
             writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], (epoch-1) * total_step + i)
 
-            for rate in size_rates: 
-                optimizer.zero_grad()
-                # ---- data prepare ----
-                images, gts = pack
-                images = images.cuda()
-                gts = gts.cuda()
-                # ---- rescale ----
-                trainsize = int(round(args.init_trainsize*rate/32)*32)
-                images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                # ---- forward ----
-                with torch.cuda.amp.autocast(enabled=args.amp):
-                    map4, map3, map2, map1 = model(images)
-                    map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    loss = structure_loss(map1, gts) + structure_loss(map2, gts) + structure_loss(map3, gts) + structure_loss(map4, gts)
-                # ---- metrics ----
-                dice_score = dice_m(map4, gts)
-                iou_score = iou_m(map4, gts)
-                # ---- backward ----
-                if args.amp:
-                    scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                    scaler.step(optimizer)
-                    scaler.update()
-                else:
-                    loss.backward()
-                    clip_gradient(optimizer, args.clip)
-                    optimizer.step()
-                # ---- recording loss ----
-                if rate == 1:
-                    loss_record.update(loss.data, args.batchsize)
-                    dice.update(dice_score.data, args.batchsize)
-                    iou.update(iou_score.data, args.batchsize)
+            # for rate in size_rates: 
+            optimizer.zero_grad()
+            # ---- data prepare ----
+            images, gts = pack
+            images = images.cuda()
+            gts = gts.cuda()
+            # ---- rescale ----
+            # trainsize = int(round(args.init_trainsize*rate/32)*32)
+            trainsize = args.init_trainsize
+            images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+            gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+            # ---- forward ----
+            with torch.cuda.amp.autocast(enabled=args.amp):
+                map4, map3, map2, map1 = model(images)
+                map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                loss = structure_loss(map1, gts) + structure_loss(map2, gts) + structure_loss(map3, gts) + structure_loss(map4, gts)
+            # ---- metrics ----
+            dice_score = dice_m(map4, gts)
+            iou_score = iou_m(map4, gts)
+            # ---- backward ----
+            if args.amp:
+                scaler.scale(loss).backward()
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                clip_gradient(optimizer, args.clip)
+                optimizer.step()
+            # ---- recording loss ----
+            # if rate == 1:
+            loss_record.update(loss.data, args.batchsize)
+            dice.update(dice_score.data, args.batchsize)
+            iou.update(iou_score.data, args.batchsize)
 
             # ---- train visualization ----
             if i == total_step:

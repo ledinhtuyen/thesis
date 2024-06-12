@@ -345,7 +345,13 @@ class SwinUnet(nn.Module):
     def __init__(self, patch_size: int = 4, in_chans: int = 3, num_classes: int = 1000, embed_dim: int = 96,
                  window_size: int = 7, depths: tuple = (2, 2, 6, 2), num_heads: tuple = (3, 6, 12, 24),
                  mlp_ratio: float = 4., qkv_bias: bool = True, drop_rate: float = 0., attn_drop_rate: float = 0.,
-                 drop_path_rate: float = 0.1, norm_layer=nn.LayerNorm, patch_norm: bool = True):
+                 drop_path_rate: float = 0.1, norm_layer=nn.LayerNorm, patch_norm: bool = True,
+                 backbone=None,
+                 neck=None,
+                 decode_haead=None,
+                 train_cfg=None,
+                 test_cfg=None,
+                 pretrained=None):
         super().__init__()
 
         self.window_size = window_size
@@ -372,6 +378,10 @@ class SwinUnet(nn.Module):
         self.final_patch_expanding = FinalPatchExpanding(dim=embed_dim, norm_layer=norm_layer)
         self.head = nn.Conv2d(in_channels=embed_dim, out_channels=num_classes, kernel_size=(1, 1), bias=False)
         self.apply(self.init_weights)
+        
+        if pretrained is not None:
+            ckpt = torch.load(pretrained, map_location='cpu')
+            self.load_state_dict(ckpt['model'], strict=False)
 
     @staticmethod
     def init_weights(m):

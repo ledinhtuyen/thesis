@@ -11,6 +11,7 @@
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from timm.models.vision_transformer import Block
 from timm.layers import PatchEmbedWithSize
@@ -117,7 +118,7 @@ class ConvEmbed(nn.Module):
         p = self.stem(x)
         return p.flatten(2).transpose(1, 2)
 
-
+from mmengine.logging import print_log
 from mmseg.registry import MODELS
 
 @MODELS.register_module()
@@ -127,6 +128,7 @@ class MaskedAutoencoderViT(nn.Module):
     def __init__(
         self,
         img_size=224,
+        downstream_size=224,
         patch_size=16,
         in_chans=3,
         embed_dim=768,
@@ -146,9 +148,16 @@ class MaskedAutoencoderViT(nn.Module):
     ):
         super().__init__()
 
-        self.img_size = img_size
+        self.img_size = img_size # pretrain image size
+        self.downstream_size = downstream_size # downstream image size
+        if self.downstream_size != self.img_size:
+            print(f"Using downstream size: {self.downstream_size}")
+            self.input_size = self.downstream_size
+        else:
+            print(f"Using pretrain size: {self.img_size}")
+            self.input_size = self.img_size
+        
         self.patch_size = patch_size
-        self.grid_size = img_size // patch_size
         self.embed_dim = embed_dim
         self.num_register_tokens = num_register_tokens
         self.out_indices = out_indices
@@ -170,7 +179,7 @@ class MaskedAutoencoderViT(nn.Module):
             )
         else:
             self.patch_embed = PatchEmbedWithSize(
-                img_size, patch_size, in_chans, embed_dim
+                self.img_size, patch_size, in_chans, embed_dim
             )
         num_patches = self.patch_embed.num_patches
 
@@ -259,60 +268,70 @@ class MaskedAutoencoderViT(nn.Module):
             else:
                 state_dict = checkpoint
 
-            if "pos_embed" in state_dict.keys() and self.use_vit_adapter == False:
-                if self.pos_embed.shape != state_dict["pos_embed"].shape:
-                    from mmengine.logging import print_log
-
-                    print_log(
-                        msg=f"Resize the pos_embed shape from "
-                        f'{state_dict["pos_embed"].shape} to '
-                        f"{self.pos_embed.shape}"
-                    )
-                    h, w = (self.img_size, self.img_size)
-                    pos_size = int(math.sqrt(state_dict["pos_embed"].shape[1] - 1))
-                    state_dict["pos_embed"] = self.resize_pos_embed(
-                        state_dict["pos_embed"],
-                        (h // self.patch_size, w // self.patch_size),
-                        (pos_size, pos_size),
-                        self.interpolate_mode,
-                    )
+            # if "pos_embed" in state_dict.keys() and self.use_vit_adapter == False:
+            #     if self.pos_embed.shape != state_dict["pos_embed"].shape:
+            #         print_log(
+            #             msg=f"Resize the pos_embed shape from "
+            #             f'{state_dict["pos_embed"].shape} to '
+            #             f"{self.pos_embed.shape}"
+            #         )
+            #         h, w = (self.downstream_size, self.downstream_size)
+            #         pos_size = int(math.sqrt(state_dict["pos_embed"].shape[1] - 1))
+            #         state_dict["pos_embed"] = self.resize_pos_embed(
+            #             state_dict["pos_embed"],
+            #             (h // self.patch_size, w // self.patch_size),
+            #             (pos_size, pos_size),
+            #             self.interpolate_mode,
+            #         )
+            
+            print_log(msg=f"Loaded pretrained model from {pretrained}")
             self.load_state_dict(state_dict, False)
         else:
             self.initialize_weights()
 
-    @staticmethod
-    def resize_pos_embed(pos_embed, input_shape, pos_shape, mode):
-        """Resize pos_embed weights.
+    # @staticmethod
+    # def resize_pos_embed(pos_embed, input_shape, pos_shape, mode):
+    #     """Resize pos_embed weights.
 
-        Resize pos_embed using bicubic interpolate method.
-        Args:
-            pos_embed (torch.Tensor): Position embedding weights.
-            input_shpae (tuple): Tuple for (downsampled input image height,
-                downsampled input image width).
-            pos_shape (tuple): The resolution of downsampled origin training
-                image.
-            mode (str): Algorithm used for upsampling:
-                ``'nearest'`` | ``'linear'`` | ``'bilinear'`` | ``'bicubic'`` |
-                ``'trilinear'``. Default: ``'nearest'``
-        Return:
-            torch.Tensor: The resized pos_embed of shape [B, L_new, C]
-        """
-        assert pos_embed.ndim == 3, "shape of pos_embed must be [B, L, C]"
-        pos_h, pos_w = pos_shape
-        cls_token_weight = pos_embed[:, 0]
-        pos_embed_weight = pos_embed[:, (-1 * pos_h * pos_w) :]
-        pos_embed_weight = pos_embed_weight.reshape(
-            1, pos_h, pos_w, pos_embed.shape[2]
-        ).permute(0, 3, 1, 2)
+    #     Resize pos_embed using bicubic interpolate method.
+    #     Args:
+    #         pos_embed (torch.Tensor): Position embedding weights.
+    #         input_shpae (tuple): Tuple for (downsampled input image height,
+    #             downsampled input image width).
+    #         pos_shape (tuple): The resolution of downsampled origin training
+    #             image.
+    #         mode (str): Algorithm used for upsampling:
+    #             ``'nearest'`` | ``'linear'`` | ``'bilinear'`` | ``'bicubic'`` |
+    #             ``'trilinear'``. Default: ``'nearest'``
+    #     Return:
+    #         torch.Tensor: The resized pos_embed of shape [B, L_new, C]
+    #     """
+    #     assert pos_embed.ndim == 3, "shape of pos_embed must be [B, L, C]"
+    #     pos_h, pos_w = pos_shape
+    #     cls_token_weight = pos_embed[:, 0]
+    #     pos_embed_weight = pos_embed[:, (-1 * pos_h * pos_w) :]
+    #     pos_embed_weight = pos_embed_weight.reshape(
+    #         1, pos_h, pos_w, pos_embed.shape[2]
+    #     ).permute(0, 3, 1, 2)
 
-        from mmseg.models.utils import resize
+    #     from mmseg.models.utils import resize
 
-        pos_embed_weight = resize(
-            pos_embed_weight, size=input_shape, align_corners=False, mode=mode
-        )
-        cls_token_weight = cls_token_weight.unsqueeze(1)
-        pos_embed_weight = torch.flatten(pos_embed_weight, 2).transpose(1, 2)
-        pos_embed = torch.cat((cls_token_weight, pos_embed_weight), dim=1)
+    #     pos_embed_weight = resize(
+    #         pos_embed_weight, size=input_shape, align_corners=False, mode=mode
+    #     )
+    #     cls_token_weight = cls_token_weight.unsqueeze(1)
+    #     pos_embed_weight = torch.flatten(pos_embed_weight, 2).transpose(1, 2)
+    #     pos_embed = torch.cat((cls_token_weight, pos_embed_weight), dim=1)
+    #     return pos_embed
+    
+    def _get_pos_embed(self, pos_embed, H, W):
+        cls_pos_embed = pos_embed[:, 0:1]
+        pos_embed = pos_embed[:, 1:]
+        pos_embed = pos_embed.reshape(
+            1, self.img_size // self.patch_size, self.img_size // self.patch_size, -1).permute(0, 3, 1, 2)
+        pos_embed = F.interpolate(pos_embed, size=(H, W), mode='bicubic', align_corners=False).\
+            reshape(1, -1, H * W).permute(0, 2, 1)
+        pos_embed = torch.cat((cls_pos_embed, pos_embed), dim=1)
         return pos_embed
 
     def forward_encoder(self, x):
@@ -322,15 +341,18 @@ class MaskedAutoencoderViT(nn.Module):
             outs.append(x)
 
         # embed patches
-        x = self.patch_embed(x)
+        x, HW = self.patch_embed(x)
+        H, W = list(HW)
 
         # add pos embed w/o cls token
-        x = x + self.pos_embed[:, 1:, :]
+        pos_embed = self._get_pos_embed(self.pos_embed, H, W)
+        
+        x = x + pos_embed[:, 1:, :]
 
         # append cls token
-        cls_token = self.cls_token + self.pos_embed[:, :1, :]
+        cls_token = self.cls_token + pos_embed[:, :1, :]
         cls_tokens = cls_token.expand(x.shape[0], -1, -1)
-        if self.register_tokens is None:
+        if self.num_register_tokens == 0:
             x = torch.cat((cls_tokens, x), dim=1)
         else:
             x = torch.cat(
@@ -350,13 +372,15 @@ class MaskedAutoencoderViT(nn.Module):
 
             if i in self.out_indices:
                 out = x[:, 1 + self.num_register_tokens :]
-                B, _, C = out.shape
+                B, L, C = out.shape
 
+                grid_size = int(L ** 0.5)
                 out = (
-                    out.reshape(B, self.grid_size, self.grid_size, C)
+                    out.reshape(B, grid_size, grid_size, C)
                     .permute(0, 3, 1, 2)
                     .contiguous()
                 )
+
                 if self.output_cls_token:
                     out = [out, x[:, 0]]
                 outs.append(out)

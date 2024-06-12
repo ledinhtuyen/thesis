@@ -3,8 +3,9 @@ CUDA_VISIBLE_DEVICES=0 \
 python trainv2.py \
       --warmup_epochs 5 \
       --num_epochs 50 \
-      --batchsize 4 \
-      --test_batchsize 32 \
-      --train_path ../../../data/endoscopy/public_dataset/TrainDataset/ \
-      configs/mae/mae_base_adapter_v2.py \
-      --work-dir work_dirs/mae_base_adapter_v2 \
+      --batchsize 2 \
+      --test_batchsize 2 \
+      --train_path /home/s/tuyenld/DATA/public_dataset/TrainDataset \
+      configs/mae/mae_base_meta_colonformerhead.py \
+      --work-dir work_dirs/mae_base_meta_colonformerhead \
+      --amp
