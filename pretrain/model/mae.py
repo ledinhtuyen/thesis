@@ -74,9 +74,10 @@ class MaskedAutoencoderViT(nn.Module):
         self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.pos_embed = nn.Parameter(torch.zeros(1, num_patches + 1, embed_dim), requires_grad=False)  # fixed sin-cos embedding
         assert num_register_tokens >= 0
-        self.register_tokens = (
-            nn.Parameter(torch.zeros(1, num_register_tokens, embed_dim)) if num_register_tokens > 0 else None
-        )
+        if self.num_register_tokens > 0:
+            self.register_tokens = (
+                nn.Parameter(torch.zeros(1, num_register_tokens, embed_dim)) if num_register_tokens > 0 else None
+            )
                 
         self.blocks = nn.ModuleList([
             Block(
@@ -133,7 +134,7 @@ class MaskedAutoencoderViT(nn.Module):
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
         torch.nn.init.normal_(self.cls_token, std=.02)
         torch.nn.init.normal_(self.mask_token, std=.02)
-        if self.register_tokens is not None:
+        if self.num_register_tokens > 0:
             torch.nn.init.normal_(self.register_tokens, std=1e-6)
 
         # initialize nn.Linear and nn.LayerNorm
@@ -217,7 +218,7 @@ class MaskedAutoencoderViT(nn.Module):
         # append cls token
         cls_token = self.cls_token + self.pos_embed[:, :1, :]
         cls_tokens = cls_token.expand(x.shape[0], -1, -1)
-        if self.register_tokens is None:
+        if self.num_register_tokens == 0:
             x = torch.cat((cls_tokens, x), dim=1)
         else:
             x = torch.cat(
@@ -247,7 +248,7 @@ class MaskedAutoencoderViT(nn.Module):
         x_ = torch.gather(x_, dim=1, index=ids_restore.unsqueeze(-1).repeat(1, 1, x.shape[2]))  # unshuffle
         
         
-        if self.register_tokens is not None:
+        if self.num_register_tokens > 0:
             register_tokens = x[:, 1:1 + self.num_register_tokens, :]
         
         x = torch.cat([x[:, :1, :], x_], dim=1)  # append cls token
@@ -255,7 +256,7 @@ class MaskedAutoencoderViT(nn.Module):
         # add pos embed
         x = x + self.decoder_pos_embed
         
-        if self.register_tokens is not None:
+        if self.num_register_tokens > 0:
             x = torch.cat(
                 (
                     x[:, :1, :],

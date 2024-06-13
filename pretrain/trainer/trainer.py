@@ -278,12 +278,16 @@ class Trainer:
 
   def load_checkpoint(self, checkpoint_path):
       checkpoint = torch.load(checkpoint_path)
-      self.model.load_state_dict(checkpoint['model'])
-      self.optimizer.load_state_dict(checkpoint['optimizer'])
-      print(self.optimizer.param_groups[0]['lr'], checkpoint['lr'])
-      self.current_epoch = checkpoint['epoch']
-      self.loss_scaler.load_state_dict(checkpoint['scaler'])
-      self.optimizer.param_groups[0]['lr'] = checkpoint['lr']
+      if 'epoch' not in checkpoint.keys():
+        self.current_epoch = 0
+        self.model.load_state_dict(checkpoint['model'], strict=False)
+      else:
+        self.model.load_state_dict(checkpoint['model'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        print(self.optimizer.param_groups[0]['lr'], checkpoint['lr'])
+        self.current_epoch = checkpoint['epoch']
+        self.loss_scaler.load_state_dict(checkpoint['scaler'])
+        self.optimizer.param_groups[0]['lr'] = checkpoint['lr']
       LOGGER.info(f"Checkpoint loaded from {checkpoint_path} with epoch {self.current_epoch}, lr={self.optimizer.param_groups[0]['lr']}")
       return self.current_epoch + 1
 

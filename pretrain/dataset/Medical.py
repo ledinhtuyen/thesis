@@ -87,6 +87,11 @@ class PretrainMedical(Dataset):
             self.meanstd = torch.load(meanstd_file)
         elif not os.path.exists(json_file) and data is None:
             raise ValueError("json_file are None")
+        
+        self.meanstd = {
+            "mean": IMAGENET_DEFAULT_MEAN,
+            "std": IMAGENET_DEFAULT_STD
+        }
 
         if train:
             self.transform = build_transforms(is_train=True, meanstd=self.meanstd)
