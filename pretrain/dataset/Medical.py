@@ -59,39 +59,11 @@ def mean_and_std(train_data, prefix_path, meanstd_file):
     # END CODE
     return meanstd
 
-class Medical(object):
-    def __init__(self, prefix_path, annotation_file, type='pretrain'):
-        self.prefix_path = prefix_path
-        self.data = json.load(open(annotation_file))
-        if type == 'pretrain':
-            self.data_list = self.data["train"]
-            self.train_data, self.test_data = train_test_split(self.data_list, test_size=0.005, random_state=42)
-
-    def get_train_data(self):
-        return self.train_data
-    
-    def get_test_data(self):
-        return self.test_data
-
 class PretrainMedical(Dataset):
-    def __init__(self, data=None, json_file="", meanstd_file="", prefix_path=None, train=False):
+    def __init__(self, data=None, meanstd={'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD}, prefix_path=None, train=True):
         self.data = data
-
-        if not os.path.exists(json_file):
-            with open(json_file, 'w') as f:
-                json.dump(data, f)
-            if train:
-                self.meanstd = mean_and_std(data, prefix_path, meanstd_file)
-        elif os.path.exists(json_file):
-            self.data = json.load(open(json_file))
-            self.meanstd = torch.load(meanstd_file)
-        elif not os.path.exists(json_file) and data is None:
-            raise ValueError("json_file are None")
         
-        self.meanstd = {
-            "mean": IMAGENET_DEFAULT_MEAN,
-            "std": IMAGENET_DEFAULT_STD
-        }
+        self.meanstd = meanstd
 
         if train:
             self.transform = build_transforms(is_train=True, meanstd=self.meanstd)

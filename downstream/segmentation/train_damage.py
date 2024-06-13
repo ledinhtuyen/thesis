@@ -16,6 +16,7 @@ from glob import glob
 
 from utils import clip_gradient, AvgMeter
 from datetime import datetime
+import json
 
 import mmseg_custom
 from mmengine.registry import init_default_scope
@@ -26,11 +27,12 @@ init_default_scope('mmseg')
 
 class Dataset(torch.utils.data.Dataset):
     
-    def __init__(self, img_paths, mask_paths, aug=True, transform=None):
+    def __init__(self, img_paths, mask_paths, prefix_path=None,aug=True, transform=None):
         self.img_paths = img_paths
         self.mask_paths = mask_paths
         self.aug = aug
         self.transform = transform
+        self.prefix_path = prefix_path
 
     def __len__(self):
         return len(self.img_paths)
@@ -38,17 +40,17 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_path = self.img_paths[idx]
         mask_path = self.mask_paths[idx]
-        image = cv2.imread(img_path)
+        image = cv2.imread(osp.join(self.prefix_path, img_path))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        mask = cv2.imread(mask_path, 0)
+        mask = cv2.imread(osp.join(self.prefix_path, mask_path), 0)
 
         if self.transform is not None:
             augmented = self.transform(image=image, mask=mask)
             image = augmented['image']
             mask = augmented['mask']
         else:
-            image = cv2.resize(image, (448, 448))
-            mask = cv2.resize(mask, (448, 448)) 
+            image = cv2.resize(image, (352, 352))
+            mask = cv2.resize(mask, (352, 352)) 
 
         image = image.astype('float32') / 255
         image = image.transpose((2, 0, 1))
@@ -58,7 +60,7 @@ class Dataset(torch.utils.data.Dataset):
         mask = mask.transpose((2, 0, 1))
 
         return np.asarray(image), np.asarray(mask)
-    
+
 epsilon = 1e-7
 
 def recall_m(y_true, y_pred):
@@ -83,7 +85,7 @@ def iou_m(y_true, y_pred):
     recall = recall_m(y_true, y_pred)
     return recall*precision/(recall+precision-recall*precision + epsilon)
 
-def get_scores(gts, prs):
+def get_macro_scores(gts, prs): # Macro
     mean_precision = 0
     mean_recall = 0
     mean_iou = 0
@@ -99,9 +101,36 @@ def get_scores(gts, prs):
     mean_iou /= len(gts)
     mean_dice /= len(gts)        
     
-    print("scores: dice={}, miou={}, precision={}, recall={}".format(mean_dice, mean_iou, mean_precision, mean_recall))
+    print("Macro scores: dice={}, miou={}, precision={}, recall={}".format(mean_dice, mean_iou, mean_precision, mean_recall))
 
     return (mean_iou, mean_dice, mean_precision, mean_recall)
+
+def get_micro_scores(gts, prs): # Micro
+  mean_precision = 0
+  mean_recall = 0
+  mean_iou = 0
+  mean_dice = 0
+  
+  total_area_intersect = 0
+  total_area_union = 0
+  total_pr = 0
+  total_gt = 0
+ 
+  for gt, pr in zip(gts, prs):
+    total_area_intersect += torch.sum(torch.round(torch.clip(gt * pr, 0, 1)))
+    total_area_union += torch.sum(torch.round(torch.clip(gt + pr, 0, 1)))
+    total_pr += torch.sum(torch.round(torch.clip(pr, 0, 1)))
+    total_gt += torch.sum(torch.round(torch.clip(gt, 0, 1)))
+    
+  mean_precision = total_area_intersect / (total_pr + epsilon)
+  mean_recall = total_area_intersect / (total_gt + epsilon)
+  mean_iou = total_area_intersect / (total_area_union + epsilon)
+  mean_dice = 2 * total_area_intersect / (total_pr + total_gt + epsilon)
+  
+  print("Micro scores: dice={}, miou={}, precision={}, recall={}".format(mean_dice, mean_iou, mean_precision, mean_recall))
+  
+  return (mean_iou, mean_dice, mean_precision, mean_recall)
+   
 
 class FocalLossV1(nn.Module):
     
@@ -154,14 +183,16 @@ def parse_args():
                         default=1e-4, help='learning rate')
     parser.add_argument('--batchsize', type=int,
                         default=8, help='training batch size')
+    parser.add_argument('--accum_iter', type=int,
+                        default=1, help='gradient accumulation steps')
     parser.add_argument('--test_batchsize', type=int,
                         default=64, help='test batch size')
     parser.add_argument('--init_trainsize', type=int,
-                        default=448, help='training dataset size')
+                        default=352, help='training dataset size')
+    parser.add_argument('--type_damage', type=str,
+                        default='daday', help='type of damage')
     parser.add_argument('--clip', type=float,
-                        default=0.5, help='gradient clipping margin')
-    parser.add_argument('--train_path', type=str,
-                        default='./data/TrainDataset', help='path to train dataset')
+                        default=1.0, help='gradient clipping margin')
     parser.add_argument('--work-dir', help='the dir to save logs and models')
     parser.add_argument(
         '--resume',
@@ -198,7 +229,7 @@ def train(train_loader,
     print_log(f"Training on epoch {epoch}", logger=logging.getLogger())
     model.train()
     # ---- multi-scale training ----
-    # size_rates = [0.75, 1, 1.25]
+    size_rates = [0.75, 1, 1.25]
     loss_record = AvgMeter()
     dice, iou = AvgMeter(), AvgMeter()
     total_step = len(train_loader)
@@ -206,6 +237,7 @@ def train(train_loader,
         scaler = torch.cuda.amp.GradScaler()
     with torch.autograd.set_detect_anomaly(True):
         start_time = datetime.now()
+        optimizer.zero_grad()
         for i, pack in enumerate(tqdm(train_loader), start=1):
             if epoch <= args.warmup_epochs:
                 optimizer.param_groups[0]["lr"] = args.init_lr * (i / total_step + epoch - 1) / args.warmup_epochs
@@ -214,44 +246,47 @@ def train(train_loader,
             
             writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], (epoch-1) * total_step + i)
 
-            # for rate in size_rates: 
-            optimizer.zero_grad()
-            # ---- data prepare ----
-            images, gts = pack
-            images = images.cuda()
-            gts = gts.cuda()
-            # ---- rescale ----
-            # trainsize = int(round(args.init_trainsize*rate/32)*32)
-            trainsize = args.init_trainsize
-            images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-            gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-            # ---- forward ----
-            with torch.cuda.amp.autocast(enabled=args.amp):
-                map4, map3, map2, map1 = model(images)
-                map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                loss = structure_loss(map1, gts) + structure_loss(map2, gts) + structure_loss(map3, gts) + structure_loss(map4, gts)
-            # ---- metrics ----
-            dice_score = dice_m(map4, gts)
-            iou_score = iou_m(map4, gts)
-            # ---- backward ----
-            if args.amp:
-                scaler.scale(loss).backward()
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                loss.backward()
-                clip_gradient(optimizer, args.clip)
-                optimizer.step()
-            # ---- recording loss ----
-            # if rate == 1:
-            loss_record.update(loss.data, args.batchsize)
-            dice.update(dice_score.data, args.batchsize)
-            iou.update(iou_score.data, args.batchsize)
+            for rate in size_rates: 
+                # optimizer.zero_grad()
+                # ---- data prepare ----
+                images, gts = pack
+                images = images.cuda()
+                gts = gts.cuda()
+                # ---- rescale ----
+                trainsize = int(round(args.init_trainsize*rate/32)*32)
+                images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                # ---- forward ----
+                with torch.cuda.amp.autocast(enabled=args.amp):
+                    map4, map3, map2, map1 = model(images)
+                    map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                    map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                    map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                    map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                    loss = structure_loss(map1, gts) + structure_loss(map2, gts) + structure_loss(map3, gts) + structure_loss(map4, gts)
+                # ---- metrics ----
+                dice_score = dice_m(map4, gts)
+                iou_score = iou_m(map4, gts)
+                # ---- backward ----
+                if args.amp:
+                    scaler.scale(loss).backward()
+                    if (i + 1) % args.accum_iter == 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad()
+                else:
+                    loss.backward()
+                    if (i + 1) % args.accum_iter == 0:
+                        clip_gradient(optimizer, args.clip)
+                        optimizer.step()
+                        optimizer.zero_grad()
+                # ---- recording loss ----
+                if rate == 1:
+                    loss_record.update(loss.data, args.batchsize)
+                    dice.update(dice_score.data, args.batchsize)
+                    iou.update(iou_score.data, args.batchsize)
 
             # ---- train visualization ----
             if i == total_step:
@@ -277,40 +312,45 @@ def train(train_loader,
     }
     torch.save(checkpoint, ckpt_path)
     
-def test(test_dataloader_dict, model, epoch, writer, args):
+def test(test_dataloader, model, epoch, writer, args):
     print_log(f"Testing on epoch {epoch}", logger=logging.getLogger())
     model.eval()
-    for k in test_dataloader_dict:
-        print_log(f"Testing on {k}", logger=logging.getLogger())
-        test_size = args.init_trainsize
-        gt_, pr_ = [], []
-        with torch.no_grad():
-            for i, pack in enumerate(tqdm(test_dataloader_dict[k]), start=1):
-                images, gts = pack
-                images = images.cuda()
-                gts = gts.cuda()
-                
-                res, _, _, _ = model(images)
-                res = F.interpolate(res, size=(test_size, test_size), mode='bilinear', align_corners=False)
-                res = res.sigmoid().data.cpu().squeeze()
-                res = (res - res.min()) / (res.max() - res.min() + 1e-8)
-                pr = res.round()
-                gts = gts.data.cpu().squeeze()
-
-                for gt, pr in zip(gts, pr):
-                    gt_.append(gt)
-                    pr_.append(pr)
+    print_log(f"Testing on {args.type_damage}", logger=logging.getLogger())
+    test_size = args.init_trainsize
+    gt_, pr_ = [], []
+    with torch.no_grad():
+        for i, pack in enumerate(tqdm(test_dataloader), start=1):
+            images, gts = pack
+            images = images.cuda()
+            gts = gts.cuda()
             
-            iou_score, dice_score, precision, recall = get_scores(gt_, pr_)
-            print('{} Testing Epoch [{:03d}/{:03d}], '
-                    '[name_dataset: {}, dice: {:0.4f}, iou: {:0.4f}]'.
-                    format(datetime.now(), epoch, args.num_epochs,\
-                            k, 
-                            dice_score,
-                            iou_score))
+            res, _, _, _ = model(images)
+            res = F.interpolate(res, size=(test_size, test_size), mode='bilinear', align_corners=False)
+            res = res.sigmoid().data.cpu().squeeze()
+            # res = (res - res.min()) / (res.max() - res.min() + 1e-8)
+            pr = res.round()
+            gts = gts.data.cpu().squeeze()
 
-            writer.add_scalar(f'test_{k}/mDice', dice_score, epoch)
-            writer.add_scalar(f'test_{k}/mIoU', iou_score, epoch)
+            for gt, pr in zip(gts, pr):
+                gt_.append(gt)
+                pr_.append(pr)
+        
+        macro_iou_score, macro_dice_score, _, _ = get_macro_scores(gt_, pr_)
+        micro_iou_score, micro_dice_score, _, _ = get_micro_scores(gt_, pr_)
+        print('{} Testing Epoch [{:03d}/{:03d}], '
+                '[name_dataset: {}, macro_dice: {:0.4f}, macro_iou: {:0.4f}, micro_dice: {:0.4f}, micro_iou: {:0.4f}]'.
+                format(datetime.now(), epoch, args.num_epochs,\
+                        args.type_damage, 
+                        macro_dice_score,
+                        macro_iou_score,
+                        micro_dice_score,
+                        micro_iou_score
+                        ))
+
+        writer.add_scalar(f'test_{args.type_damage}/mMacroDice', macro_dice_score, epoch)
+        writer.add_scalar(f'test_{args.type_damage}/mMacroIoU', macro_iou_score, epoch)
+        writer.add_scalar(f'test_{args.type_damage}/mMicroDice', micro_dice_score, epoch)
+        writer.add_scalar(f'test_{args.type_damage}/mMicroIoU', micro_iou_score, epoch)
 
 def main():
     args = parse_args()
@@ -347,15 +387,17 @@ def main():
     else:
         print("Save path existed")
 
+    if args.type_damage != "polyp":
+        data = json.load(open("/mnt/tuyenld/data/endoscopy/processed/ft_ton_thuong.json"))
+        data_damage = data[args.type_damage]
+    else:
+        data_damage = json.load(open("/mnt/tuyenld/data/endoscopy/processed/polyp.json"))
+
     # Build the dataloader
-    train_img_paths = []
-    train_mask_paths = []
-    train_img_paths = glob('{}/image/*'.format(args.train_path))
-    train_mask_paths = glob('{}/masks/*'.format(args.train_path))
-    train_img_paths.sort()
-    train_mask_paths.sort()
+    train_img_paths = data_damage["train"]["images"]
+    train_mask_paths = data_damage["train"]["masks"]
     
-    train_dataset = Dataset(train_img_paths, train_mask_paths)
+    train_dataset = Dataset(train_img_paths, train_mask_paths, prefix_path="/mnt/tuyenld/data/endoscopy/")
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batchsize,
@@ -365,21 +407,16 @@ def main():
     )
     
     # Build validation dataloader
-    test_dataloader_dict = {}
-    for k, v in cfg.test_path.items():
-        test_img_paths = glob('{}/images/*'.format(v))
-        test_mask_paths = glob('{}/masks/*'.format(v))
-        test_img_paths.sort()
-        test_mask_paths.sort()
-        test_dataset = Dataset(test_img_paths, test_mask_paths)
-        test_loader = torch.utils.data.DataLoader(
-            test_dataset,
-            batch_size=args.test_batchsize,
-            shuffle=False,
-            pin_memory=True,
-            drop_last=False
-        )
-        test_dataloader_dict[k] = test_loader
+    val_img_paths = data_damage["test"]["images"]
+    val_mask_paths = data_damage["test"]["masks"]
+    val_dataset = Dataset(val_img_paths, val_mask_paths, prefix_path="/mnt/tuyenld/data/endoscopy/")
+    val_loader = torch.utils.data.DataLoader(
+        val_dataset,
+        batch_size=args.batchsize,
+        shuffle=True,
+        pin_memory=True,
+        drop_last=True
+    )
 
     # Build the model
     model = MODELS.build(cfg.model).cuda()
@@ -408,7 +445,7 @@ def main():
               save_path, 
               writer, 
               args)
-        test(test_dataloader_dict, model, epoch, writer, args)
+        test(val_loader, model, epoch, writer, args)
 
 if __name__ == '__main__':
     main()
