@@ -13,7 +13,7 @@ from util.general import (
     create_new_exp
 )
 from util.callbacks import Callbacks
-from trainer import Trainer, MAEGANTrainer
+from trainer import Trainer
 
 
 FILE = Path(__file__).resolve()
