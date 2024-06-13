@@ -154,6 +154,8 @@ def parse_args():
                         default=1e-4, help='learning rate')
     parser.add_argument('--batchsize', type=int,
                         default=8, help='training batch size')
+    parser.add_argument('--accum_iter', type=int,
+                        default=1, help='gradient accumulation steps')
     parser.add_argument('--test_batchsize', type=int,
                         default=64, help='test batch size')
     parser.add_argument('--init_trainsize', type=int,
@@ -206,6 +208,7 @@ def train(train_loader,
         scaler = torch.cuda.amp.GradScaler()
     with torch.autograd.set_detect_anomaly(True):
         start_time = datetime.now()
+        optimizer.zero_grad()
         for i, pack in enumerate(tqdm(train_loader), start=1):
             if epoch <= args.warmup_epochs:
                 optimizer.param_groups[0]["lr"] = args.init_lr * (i / total_step + epoch - 1) / args.warmup_epochs
@@ -215,7 +218,7 @@ def train(train_loader,
             writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], (epoch-1) * total_step + i)
 
             for rate in size_rates: 
-                optimizer.zero_grad()
+                # optimizer.zero_grad()
                 # ---- data prepare ----
                 images, gts = pack
                 images = images.cuda()
@@ -238,14 +241,18 @@ def train(train_loader,
                 # ---- backward ----
                 if args.amp:
                     scaler.scale(loss).backward()
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                    scaler.step(optimizer)
-                    scaler.update()
+                    if (i + 1) % args.accum_iter == 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad()
                 else:
                     loss.backward()
-                    clip_gradient(optimizer, args.clip)
-                    optimizer.step()
+                    if (i + 1) % args.accum_iter == 0:
+                        clip_gradient(optimizer, args.clip)
+                        optimizer.step()
+                        optimizer.zero_grad()
                 # ---- recording loss ----
                 if rate == 1:
                     loss_record.update(loss.data, args.batchsize)

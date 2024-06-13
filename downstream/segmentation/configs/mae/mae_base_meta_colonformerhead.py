@@ -1,4 +1,4 @@
-pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/vit-base-mae/mae_pretrain_vit_base.pth"
+pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/continue_pretrain/weight/epoch_60.pth"
 norm_cfg = dict(type='BN', requires_grad=True)
 model = dict(
     type='EncoderDecoderV2',
