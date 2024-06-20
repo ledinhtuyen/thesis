@@ -386,9 +386,12 @@ def main():
         cfg.dump(save_path + '/config.py')
     else:
         print("Save path existed")
-        
-    data = json.load(open("/mnt/tuyenld/data/endoscopy/processed/ft_ton_thuong.json"))
-    data_damage = data[args.type_damage]
+
+    if args.type_damage != "polyp":
+        data = json.load(open("/mnt/tuyenld/data/endoscopy/processed/ft_ton_thuong.json"))
+        data_damage = data[args.type_damage]
+    else:
+        data_damage = json.load(open("/mnt/tuyenld/data/endoscopy/processed/polyp.json"))
 
     # Build the dataloader
     train_img_paths = data_damage["train"]["images"]

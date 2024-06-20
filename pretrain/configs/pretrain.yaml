@@ -16,12 +16,12 @@ hyp:
   gradient_accumulation_steps: 4
 
 Model:
-  name: "mae_vit_base_patch16"
+  name: "mae_vit_base_patch16_with_register"
 
 Dataset:
   prefix_path: "/home/s/tuyenld/DATA/"
   data_name: "Endoscopy"
-  annotation_file: "./configs/pretrainv2.json"
+  annotation_file: "/mnt/tuyenld/data/endoscopy/processed/pretrain.json"
   img_size: 224
   batch_size: 64
   num_workers: 8
