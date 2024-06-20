@@ -143,7 +143,6 @@ class MaskedAutoencoderViT(nn.Module):
         interpolate_mode="bicubic",
         use_conv_stem=False,
         output_cls_token=False,
-        use_vit_adapter=False,
         **kwargs,
     ):
         super().__init__()
@@ -166,7 +165,6 @@ class MaskedAutoencoderViT(nn.Module):
         self.interpolate_mode = interpolate_mode
         self.use_conv_stem = use_conv_stem
         self.output_cls_token = output_cls_token
-        self.use_vit_adapter = use_vit_adapter
 
         # --------------------------------------------------------------------------
         # MAE encoder specifics
@@ -228,7 +226,7 @@ class MaskedAutoencoderViT(nn.Module):
 
         # timm's trunc_normal_(std=.02) is effectively normal_(std=0.02) as cutoff is too big (2.)
         torch.nn.init.normal_(self.cls_token, std=0.02)
-        if self.register_tokens is not None:
+        if self.num_register_tokens > 0:
             torch.nn.init.normal_(self.register_tokens, std=1e-6)
 
         # initialize nn.Linear and nn.LayerNorm
@@ -267,62 +265,11 @@ class MaskedAutoencoderViT(nn.Module):
                 state_dict = checkpoint["model"]
             else:
                 state_dict = checkpoint
-
-            # if "pos_embed" in state_dict.keys() and self.use_vit_adapter == False:
-            #     if self.pos_embed.shape != state_dict["pos_embed"].shape:
-            #         print_log(
-            #             msg=f"Resize the pos_embed shape from "
-            #             f'{state_dict["pos_embed"].shape} to '
-            #             f"{self.pos_embed.shape}"
-            #         )
-            #         h, w = (self.downstream_size, self.downstream_size)
-            #         pos_size = int(math.sqrt(state_dict["pos_embed"].shape[1] - 1))
-            #         state_dict["pos_embed"] = self.resize_pos_embed(
-            #             state_dict["pos_embed"],
-            #             (h // self.patch_size, w // self.patch_size),
-            #             (pos_size, pos_size),
-            #             self.interpolate_mode,
-            #         )
             
             print_log(msg=f"Loaded pretrained model from {pretrained}")
             self.load_state_dict(state_dict, False)
         else:
             self.initialize_weights()
-
-    # @staticmethod
-    # def resize_pos_embed(pos_embed, input_shape, pos_shape, mode):
-    #     """Resize pos_embed weights.
-
-    #     Resize pos_embed using bicubic interpolate method.
-    #     Args:
-    #         pos_embed (torch.Tensor): Position embedding weights.
-    #         input_shpae (tuple): Tuple for (downsampled input image height,
-    #             downsampled input image width).
-    #         pos_shape (tuple): The resolution of downsampled origin training
-    #             image.
-    #         mode (str): Algorithm used for upsampling:
-    #             ``'nearest'`` | ``'linear'`` | ``'bilinear'`` | ``'bicubic'`` |
-    #             ``'trilinear'``. Default: ``'nearest'``
-    #     Return:
-    #         torch.Tensor: The resized pos_embed of shape [B, L_new, C]
-    #     """
-    #     assert pos_embed.ndim == 3, "shape of pos_embed must be [B, L, C]"
-    #     pos_h, pos_w = pos_shape
-    #     cls_token_weight = pos_embed[:, 0]
-    #     pos_embed_weight = pos_embed[:, (-1 * pos_h * pos_w) :]
-    #     pos_embed_weight = pos_embed_weight.reshape(
-    #         1, pos_h, pos_w, pos_embed.shape[2]
-    #     ).permute(0, 3, 1, 2)
-
-    #     from mmseg.models.utils import resize
-
-    #     pos_embed_weight = resize(
-    #         pos_embed_weight, size=input_shape, align_corners=False, mode=mode
-    #     )
-    #     cls_token_weight = cls_token_weight.unsqueeze(1)
-    #     pos_embed_weight = torch.flatten(pos_embed_weight, 2).transpose(1, 2)
-    #     pos_embed = torch.cat((cls_token_weight, pos_embed_weight), dim=1)
-    #     return pos_embed
     
     def _get_pos_embed(self, pos_embed, H, W):
         cls_pos_embed = pos_embed[:, 0:1]

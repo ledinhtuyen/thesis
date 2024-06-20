@@ -16,7 +16,10 @@ model = MAEAdapter(
   num_register_tokens=4,
 ).cuda()
 
-output = model(torch.randn(5, 3, 512, 512).cuda())
+output = model(torch.randn(5, 3, 384, 384).cuda())
+
+for i in output:
+    print(i.shape)
 
 while True:
     pass

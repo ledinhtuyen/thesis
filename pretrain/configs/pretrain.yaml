@@ -2,7 +2,7 @@
 project: "runs/pretrainv2"
 snapshot_dir: "weight"
 log_dir: "log"
-resume_checkpoint: "/mnt/tuyenld/mae/pretrain/runs/pretrainv2/vit-mae-base/mae_pretrain_vit_base.pth" # path to checkpoint if you want to resume training
+resume_checkpoint: "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/vit-base-mae/mae_pretrain_vit_base.pth" # path to checkpoint if you want to resume training
 warmup_epochs: 2
 epochs: 100
 save_period: 5
@@ -19,7 +19,7 @@ Model:
   name: "mae_vit_base_patch16_with_register"
 
 Dataset:
-  prefix_path: "../../data/endoscopy"
+  prefix_path: "/home/s/tuyenld/DATA/"
   data_name: "Endoscopy"
   annotation_file: "/mnt/tuyenld/data/endoscopy/processed/pretrain.json"
   img_size: 224
