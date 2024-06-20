@@ -14,6 +14,8 @@ import cv2
 from tqdm import tqdm
 from glob import glob
 
+import albumentations as A
+
 from utils import clip_gradient, AvgMeter
 from datetime import datetime
 
@@ -24,6 +26,8 @@ from mmengine.logging import print_log
 from mmseg.registry import MODELS
 init_default_scope('mmseg')
 
+IMG_SIZE = (384, 384)
+
 class Dataset(torch.utils.data.Dataset):
     
     def __init__(self, img_paths, mask_paths, aug=True, transform=None):
@@ -31,6 +35,9 @@ class Dataset(torch.utils.data.Dataset):
         self.mask_paths = mask_paths
         self.aug = aug
         self.transform = transform
+        self.t = A.Compose([
+            A.Resize(IMG_SIZE[0], IMG_SIZE[1]),
+        ])
 
     def __len__(self):
         return len(self.img_paths)
@@ -46,9 +53,11 @@ class Dataset(torch.utils.data.Dataset):
             augmented = self.transform(image=image, mask=mask)
             image = augmented['image']
             mask = augmented['mask']
-        else:
-            image = cv2.resize(image, (352, 352))
-            mask = cv2.resize(mask, (352, 352)) 
+        
+        if image.shape != (IMG_SIZE[0], IMG_SIZE[1], 3) or mask.shape != (IMG_SIZE[0], IMG_SIZE[1]):
+            augmented = self.t(image=image, mask=mask)
+            image = augmented['image']
+            mask = augmented['mask']
 
         image = image.astype('float32') / 255
         image = image.transpose((2, 0, 1))
@@ -143,6 +152,14 @@ def structure_loss(pred, mask):
     wiou = 1 - (inter + 1)/(union - inter+1)
     return (wfocal + wiou).mean()
 
+def bce_dice_loss(pred, mask):
+    bce = F.binary_cross_entropy_with_logits(pred, mask)
+    pred = torch.sigmoid(pred)
+    inter = torch.sum(pred * mask)
+    union = torch.sum(pred) + torch.sum(mask)
+    dice = 1 - 2 * inter / union
+    return bce + dice
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Train')
     parser.add_argument('config', help='train config file path')
@@ -159,9 +176,9 @@ def parse_args():
     parser.add_argument('--test_batchsize', type=int,
                         default=64, help='test batch size')
     parser.add_argument('--init_trainsize', type=int,
-                        default=352, help='training dataset size')
+                        default=384, help='training dataset size')
     parser.add_argument('--clip', type=float,
-                        default=0.5, help='gradient clipping margin')
+                        default=1.0, help='gradient clipping margin')
     parser.add_argument('--train_path', type=str,
                         default='./data/TrainDataset', help='path to train dataset')
     parser.add_argument('--work-dir', help='the dir to save logs and models')
@@ -200,10 +217,12 @@ def train(train_loader,
     print_log(f"Training on epoch {epoch}", logger=logging.getLogger())
     model.train()
     # ---- multi-scale training ----
-    size_rates = [0.65, 0.75, 1, 1.15, 1.25, 1.5]
+    # size_rates = [0.75, 1, 1.25]
+    size_rates = [0.7, 1, 1.37]
     loss_record = AvgMeter()
     dice, iou = AvgMeter(), AvgMeter()
     total_step = len(train_loader)
+    criterion = structure_loss
     if args.amp:
         scaler = torch.cuda.amp.GradScaler()
     with torch.autograd.set_detect_anomaly(True):
@@ -234,7 +253,7 @@ def train(train_loader,
                     map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
                     map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
                     map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    loss = structure_loss(map1, gts) + structure_loss(map2, gts) + structure_loss(map3, gts) + structure_loss(map4, gts)
+                    loss = criterion(map1, gts) + criterion(map2, gts) + criterion(map3, gts) + criterion(map4, gts)
                 # ---- metrics ----
                 dice_score = dice_m(map4, gts)
                 iou_score = iou_m(map4, gts)
@@ -299,7 +318,7 @@ def test(test_dataloader_dict, model, epoch, writer, args):
                 res, _, _, _ = model(images)
                 res = F.interpolate(res, size=(test_size, test_size), mode='bilinear', align_corners=False)
                 res = res.sigmoid().data.cpu().squeeze()
-                res = (res - res.min()) / (res.max() - res.min() + 1e-8)
+                # res = (res - res.min()) / (res.max() - res.min() + 1e-8)
                 pr = res.round()
                 gts = gts.data.cpu().squeeze()
 
@@ -353,6 +372,21 @@ def main():
     else:
         print("Save path existed")
 
+    train_transform = A.Compose([
+        A.RandomRotate90(),
+        A.Flip(),
+        # A.D4(),
+        A.HueSaturationValue(),
+        A.RandomBrightnessContrast(),
+        A.GridDistortion(),
+        A.MotionBlur(),
+        A.OneOf([
+            A.RandomCrop(224, 224, p=1),
+            A.CenterCrop(224, 224, p=1)
+        ], p=0.2),
+        A.Resize(IMG_SIZE[0], IMG_SIZE[1]),
+    ], p=0.5)
+
     # Build the dataloader
     train_img_paths = []
     train_mask_paths = []
@@ -360,8 +394,8 @@ def main():
     train_mask_paths = glob('{}/masks/*'.format(args.train_path))
     train_img_paths.sort()
     train_mask_paths.sort()
-    
-    train_dataset = Dataset(train_img_paths, train_mask_paths)
+
+    train_dataset = Dataset(train_img_paths, train_mask_paths, transform=train_transform)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batchsize,
@@ -397,13 +431,14 @@ def main():
                                     eta_min=args.init_lr/1000)
         
     start_epoch = 1
-    if args.resume != '':
+    if args.resume != "":
+        print_log('Resuming from checkpoint: %s' % args.resume, logger=logging.getLogger())
         checkpoint = torch.load(args.resume)
         start_epoch = checkpoint['epoch']
         model.load_state_dict(checkpoint['state_dict'])
         lr_scheduler.load_state_dict(checkpoint['scheduler'])
         optimizer.load_state_dict(checkpoint['optimizer'])
-        
+
     print_log('Start running, epoch: %d' % start_epoch, logger=logging.getLogger())
     for epoch in range(start_epoch, args.num_epochs+1):
         train(train_loader, 
