@@ -75,25 +75,25 @@ class CalcMetric:
           self.gts[i] = label
     
     def calc_cls_metric(self, type, epoch):
-      if type == 0:
-        class_names = ["Hầu họng", "Thực quản", "Tam vị", "Thân vị", "Phình vị", "Hang vị", "Bờ cong lớn", "Bờ cong nhỏ", "Hành tá tràng", "Tá tràng"]
-        macro_acc = Accuracy(task="multiclass", num_classes=10, average="macro")
-        micro_acc = Accuracy(task="multiclass", num_classes=10, average="micro")
-        confmat = ConfusionMatrix(task="multiclass", num_classes=10)
-      elif type == 6:
-        class_names = ["Lành tính", "Ác tính"]
-        macro_acc = Accuracy(task="binary", num_classes=2, average="macro")
-        micro_acc = Accuracy(task="binary", num_classes=2, average="micro")
-        confmat = ConfusionMatrix(task="binary", num_classes=2)
+        if type == 0:
+            class_names = ["Hầu họng", "Thực quản", "Tam vị", "Thân vị", "Phình vị", "Hang vị", "Bờ cong lớn", "Bờ cong nhỏ", "Hành tá tràng", "Tá tràng"]
+            macro_acc = Accuracy(task="multiclass", num_classes=10, average="macro")
+            micro_acc = Accuracy(task="multiclass", num_classes=10, average="micro")
+            confmat = ConfusionMatrix(task="multiclass", num_classes=10)
+        elif type == 6:
+            class_names = ["Lành tính", "Ác tính"]
+            macro_acc = Accuracy(task="binary", num_classes=2, average="macro")
+            micro_acc = Accuracy(task="binary", num_classes=2, average="micro")
+            confmat = ConfusionMatrix(task="binary", num_classes=2)
 
-      macro_acc_ = macro_acc(self.pred[type], self.gts[type])
-      micro_acc_ = micro_acc(self.pred[type], self.gts[type])
-      confusion_matrix = confmat(self.pred[type], self.gts[type])
-      conf_img = plot_confusion_matrix(confusion_matrix, class_names, normalize=True)
-      
-      self.writer.add_scalar(f'cls_{type}/macro_acc', macro_acc_, epoch)
-      self.writer.add_scalar(f'cls_{type}/micro_acc', micro_acc_, epoch)
-      self.writer.add_image(f'cls_{type}/confusion_matrix', conf_img, epoch, dataformats='HWC')
+        macro_acc_ = macro_acc(self.pred[type], self.gts[type])
+        micro_acc_ = micro_acc(self.pred[type], self.gts[type])
+        confusion_matrix = confmat(self.pred[type], self.gts[type])
+        conf_img = plot_confusion_matrix(confusion_matrix, class_names, normalize=True)
+        
+        self.writer.add_scalar(f'cls_{type}/macro_acc', macro_acc_, epoch)
+        self.writer.add_scalar(f'cls_{type}/micro_acc', micro_acc_, epoch)
+        self.writer.add_image(f'cls_{type}/confusion_matrix', conf_img, epoch, dataformats='HWC')
 
     def calc_seg_metric(self, type, epoch):
       macro_iou, macro_dice, _, _ = get_macro_scores(self.pred[type], self.gts[type])
@@ -252,9 +252,6 @@ def test(test_dataloader, model, epoch, writer, args):
             output = model(images)
             
             met.add(output, masks, cls_label, type)
-
-            if i == 10:
-              break
         
         for i in range(8):
           if i == 0 or i == 6:
@@ -323,17 +320,19 @@ def main():
         batch_size=args.batchsize,
         shuffle=True,
         pin_memory=True,
-        drop_last=True
+        drop_last=True,
+        num_workers=16
     )
     
     # Build validation dataloader
     val_dataset = MultiDataset(data.val_samples, args.prefix_path, img_size=args.init_trainsize)
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=args.batchsize,
-        shuffle=True,
+        batch_size=args.test_batchsize,
+        shuffle=False,
         pin_memory=True,
-        drop_last=True
+        drop_last=False,
+        num_workers=16
     )
 
     # Build the model

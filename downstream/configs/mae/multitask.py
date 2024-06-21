@@ -1,4 +1,4 @@
-pretrained = "/workspace/continue_pretrain/weight/epoch_70.pth"
+pretrained = "/workspace/mae_continue_pretrain/epoch_90.pth"
 norm_cfg = dict(type='BN', requires_grad=True)
 model = dict(
     type='MultiTask',
