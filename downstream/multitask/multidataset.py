@@ -1,3 +1,5 @@
+import os
+import os.path as osp
 import torch
 import json
 import numpy as np
@@ -73,11 +75,11 @@ class MultiDataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         type, img_path, mask_path, cls_label = self.data[idx]
         
-        image = Image.open(self.prefix_path + img_path)
+        image = Image.open(osp.join(self.prefix_path, img_path))
         image = np.array(image)
         
         if mask_path is not None:
-            mask = cv2.imread(self.prefix_path + mask_path, 0)
+            mask = cv2.imread(osp.join(self.prefix_path, mask_path), 0)
         else:
             mask = np.zeros_like(image[:,:,0])
         

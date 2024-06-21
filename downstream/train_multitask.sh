@@ -8,6 +8,6 @@ python train_multitask.py \
       --test_batchsize 16 \
       --accum_iter 1 \
       --metadata_file /workspace/endoscopy/multitask.json \
-      --prefix_path /workspace/DATA \
+      --prefix_path /workspace/DATA/ \
       configs/mae/multitask.py \
       --work-dir work_dirs/multitask
