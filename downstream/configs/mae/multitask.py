@@ -1,4 +1,4 @@
-pretrained = "/mnt/tuyenld/mae/pretrain/runs/pretrainv2/continue_pretrain/weight/epoch_60.pth"
+pretrained = "/workspace/continue_pretrain/weight/epoch_70.pth"
 norm_cfg = dict(type='BN', requires_grad=True)
 model = dict(
     type='MultiTask',

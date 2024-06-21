@@ -48,45 +48,6 @@ def bi_cls_loss(pred, label, type):
 
 class CalcMetric:
     def __init__(self, writer) -> None:
-        # self.metric = MetricMeter()
-        # self.metric.add_meter([
-        #   "cls_pos/macro_acc",
-        #   "cls_pos/micro_acc",
-        #   "cls_pos/confusion_matrix",
-          
-        #   "cls_hp/macro_acc",
-        #   "cls_hp/micro_acc",
-        #   "cls_hp/confusion_matrix",
-          
-        #   "seg_uttq/macro_dice",
-        #   "seg_uttq/micro_dice",
-        #   "seg_uttq/macro_iou",
-        #   "seg_uttq/micro_iou",
-          
-        #   "seg_vtq/macro_dice",
-        #   "seg_vtq/micro_dice",
-        #   "seg_vtq/macro_iou",
-        #   "seg_vtq/micro_iou",
-          
-        #   "seg_vlhtt/macro_dice",
-        #   "seg_vlhtt/micro_dice",
-        #   "seg_vlhtt/macro_iou",
-        #   "seg_vlhtt/micro_iou",
-          
-        #   "seg_utdd/macro_dice",
-        #   "seg_utdd/micro_dice",
-        #   "seg_utdd/macro_iou",
-        #   "seg_utdd/micro_iou",
-          
-        #   "seg_vdd/macro_dice",
-        #   "seg_vdd/micro_dice",
-        #   "seg_vdd/macro_iou",
-        #   "seg_vdd/micro_iou",
-          
-        #   "seg_polyp/macro_dice",
-        #   "seg_polyp/micro_dice",
-        #   "seg_polyp/macro_iou",
-        # ])
         self.pred = {}
         self.gts = {}
         self.writer = writer
@@ -394,14 +355,14 @@ def main():
         
     print_log('Start running, epoch: %d' % start_epoch, logger=logging.getLogger())
     for epoch in range(start_epoch, args.num_epochs+1):
-        # train(train_loader, 
-        #       model, 
-        #       optimizer, 
-        #       epoch, 
-        #       lr_scheduler, 
-        #       save_path, 
-        #       writer, 
-        #       args)
+        train(train_loader, 
+              model, 
+              optimizer, 
+              epoch, 
+              lr_scheduler, 
+              save_path, 
+              writer, 
+              args)
         test(val_loader, model, epoch, writer, args)
 
 if __name__ == '__main__':
