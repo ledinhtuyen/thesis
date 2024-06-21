@@ -96,13 +96,16 @@ class CalcMetric:
         self.writer.add_image(f'cls_{type}/confusion_matrix', conf_img, epoch, dataformats='HWC')
 
     def calc_seg_metric(self, type, epoch):
-      macro_iou, macro_dice, _, _ = get_macro_scores(self.pred[type], self.gts[type])
-      micro_io, micro_dice, _, _ = get_micro_scores(self.pred[type], self.gts[type])
-      
-      self.writer.add_scalar(f'seg_{type}/macro_dice', macro_dice, epoch)
-      self.writer.add_scalar(f'seg_{type}/macro_iou', macro_iou, epoch)
-      self.writer.add_scalar(f'seg_{type}/micro_dice', micro_dice, epoch)
-      self.writer.add_scalar(f'seg_{type}/micro_iou', micro_io, epoch)
+        self.pred[type] = self.pred[type].data.sigmoid().round().data.squeeze()
+        self.gts[type] = self.gts[type].data.squeeze()
+
+        macro_iou, macro_dice, _, _ = get_macro_scores(self.pred[type], self.gts[type])
+        micro_io, micro_dice, _, _ = get_micro_scores(self.pred[type], self.gts[type])
+        
+        self.writer.add_scalar(f'seg_{type}/macro_dice', macro_dice, epoch)
+        self.writer.add_scalar(f'seg_{type}/macro_iou', macro_iou, epoch)
+        self.writer.add_scalar(f'seg_{type}/micro_dice', micro_dice, epoch)
+        self.writer.add_scalar(f'seg_{type}/micro_iou', micro_io, epoch)
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train')
@@ -119,6 +122,8 @@ def parse_args():
                         default=1, help='gradient accumulation steps')
     parser.add_argument('--test_batchsize', type=int,
                         default=64, help='test batch size')
+    parser.add_argument('--num_workers', type=int,
+                        default=16, help='test batch size')
     parser.add_argument('--init_trainsize', type=int,
                         default=384, help='training dataset size')
     parser.add_argument('--metadata_file', type=str,
@@ -321,7 +326,7 @@ def main():
         shuffle=True,
         pin_memory=True,
         drop_last=True,
-        num_workers=16
+        num_workers=args.num_workers
     )
     
     # Build validation dataloader
@@ -330,9 +335,9 @@ def main():
         val_dataset,
         batch_size=args.test_batchsize,
         shuffle=False,
-        pin_memory=True,
+        pin_memory=False,
         drop_last=False,
-        num_workers=16
+        num_workers=args.num_workers
     )
 
     # Build the model
