@@ -183,7 +183,7 @@ def plot_confusion_matrix(cm, class_names, normalize=False):
         cm = np.nan_to_num(cm.astype('float') / (cm.sum(axis=1)[:, np.newaxis] + 1e-7))
 
     # Big size
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=(12, 12))
     cax = ax.matshow(cm, cmap='Blues')
 
     ax.set_title('Confusion matrix')

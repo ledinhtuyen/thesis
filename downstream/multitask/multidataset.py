@@ -18,13 +18,18 @@ class Data:
         for key in metadata:
             type = metadata[key]['type']
             if type == 'seg':
-                self.process_segmentation(metadata[key], key)
+                self.process_segmentation(metadata, key)
             elif type == 'cls':
-                self.process_classification(metadata[key], key)
+                self.process_classification(metadata, key)
                 
-    def process_segmentation(self, metadata, key):
+    def process_segmentation(self, metadata_, key):
+        metadata = metadata_[key]
+        with open(metadata_["hp"]['annotation']) as f:
+            hp_data = json.load(f)
+
         with open(metadata['annotation']) as f:
             data = json.load(f)
+
         if key == 'polyp':
           for name in data:
             if name == "train":
@@ -38,22 +43,32 @@ class Data:
             for name2 in data[name]:
               if name2 == "train":
                 for img_path, mask_path in zip(data[name][name2]["images"], data[name][name2]["masks"]):
-                  self.train_samples.append([metadata["label"][name], img_path, mask_path, None])
+                  if name != "viem_da_day_20230620":
+                      self.train_samples.append([metadata["label"][name], img_path, mask_path, None])
+                  else:
+                    for e in hp_data["train"]:
+                      if e["image"] == img_path:
+                        self.train_samples.append([metadata["label"][name], img_path, mask_path, e["label"]])
+                        break
               elif name2 == "test":
                 for img_path, mask_path in zip(data[name][name2]["images"], data[name][name2]["masks"]):
-                  self.val_samples.append([metadata["label"][name], img_path, mask_path, None])
+                  if name != "viem_da_day_20230620":
+                      self.val_samples.append([metadata["label"][name], img_path, mask_path, None])
+                  else:
+                    for e in hp_data["test_positive"]["images"]:
+                      if e == img_path:
+                        self.val_samples.append([metadata["label"][name], img_path, mask_path, hp_data["test_positive"]["label"]])
+                        break
+                    for e in hp_data["test_negative"]["images"]:
+                      if e == img_path:
+                        self.val_samples.append([metadata["label"][name], img_path, mask_path, hp_data["test_negative"]["label"]])
+                        break
     
-    def process_classification(self, metadata, key):
+    def process_classification(self, metadata_, key):
+        metadata = metadata_[key]
         with open(metadata['annotation']) as f:
             data = json.load(f)
-        if key == 'hp':
-          for e in data["train"]:
-            self.train_samples.append([metadata["label"], e["image"], None, e["label"]])
-          for e in data["test_positive"]["images"]:
-            self.val_samples.append([metadata["label"], e, None, data["test_positive"]["label"]])
-          for e in data["test_negative"]["images"]:
-            self.val_samples.append([metadata["label"], e, None, data["test_negative"]["label"]])
-        elif key == 'position':
+        if key == 'position':
             for name in data:
                 for e in data[name]["train"]:
                     self.train_samples.append([metadata["label"], e, None, metadata["cls_label"][name]])

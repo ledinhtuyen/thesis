@@ -14,6 +14,8 @@ import cv2
 from tqdm import tqdm
 from glob import glob
 
+import albumentations as A
+
 from utils import clip_gradient, AvgMeter
 from datetime import datetime
 import json
@@ -27,12 +29,13 @@ init_default_scope('mmseg')
 
 class Dataset(torch.utils.data.Dataset):
     
-    def __init__(self, img_paths, mask_paths, prefix_path=None,aug=True, transform=None):
+    def __init__(self, img_paths, mask_paths, prefix_path=None, img_size=384, transform=None):
         self.img_paths = img_paths
         self.mask_paths = mask_paths
-        self.aug = aug
         self.transform = transform
         self.prefix_path = prefix_path
+        self.img_size = img_size
+        self.t = A.Resize(img_size, img_size)
 
     def __len__(self):
         return len(self.img_paths)
@@ -48,9 +51,11 @@ class Dataset(torch.utils.data.Dataset):
             augmented = self.transform(image=image, mask=mask)
             image = augmented['image']
             mask = augmented['mask']
-        else:
-            image = cv2.resize(image, (352, 352))
-            mask = cv2.resize(mask, (352, 352)) 
+
+        if image.shape != (self.img_size, self.img_size, 3):
+            augmented = self.t(image=image, mask=mask)
+            image = augmented['image']
+            mask = augmented['mask']
 
         image = image.astype('float32') / 255
         image = image.transpose((2, 0, 1))
@@ -130,7 +135,6 @@ def get_micro_scores(gts, prs): # Micro
   print("Micro scores: dice={}, miou={}, precision={}, recall={}".format(mean_dice, mean_iou, mean_precision, mean_recall))
   
   return (mean_iou, mean_dice, mean_precision, mean_recall)
-   
 
 class FocalLossV1(nn.Module):
     
@@ -188,7 +192,11 @@ def parse_args():
     parser.add_argument('--test_batchsize', type=int,
                         default=64, help='test batch size')
     parser.add_argument('--init_trainsize', type=int,
-                        default=352, help='training dataset size')
+                        default=384, help='training dataset size')
+    parser.add_argument('--prefix_path', type=str,
+                        default='/mnt/tuyenld/data/endoscopy/', help='prefix path')
+    parser.add_argument('--num_workers', type=int,
+                        default=16, help='test batch size')
     parser.add_argument('--type_damage', type=str,
                         default='daday', help='type of damage')
     parser.add_argument('--clip', type=float,
@@ -229,12 +237,13 @@ def train(train_loader,
     print_log(f"Training on epoch {epoch}", logger=logging.getLogger())
     model.train()
     # ---- multi-scale training ----
-    size_rates = [0.75, 1, 1.25]
+    # size_rates = [0.75, 1, 1.25]
+    # size_rates = [0.7, 1, 1.37]
     loss_record = AvgMeter()
     dice, iou = AvgMeter(), AvgMeter()
     total_step = len(train_loader)
     if args.amp:
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.cuda.amp.GradScaler(init_scale=2**13)
     with torch.autograd.set_detect_anomaly(True):
         start_time = datetime.now()
         optimizer.zero_grad()
@@ -246,61 +255,60 @@ def train(train_loader,
             
             writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], (epoch-1) * total_step + i)
 
-            for rate in size_rates: 
+            # for rate in size_rates: 
                 # optimizer.zero_grad()
                 # ---- data prepare ----
-                images, gts = pack
-                images = images.cuda()
-                gts = gts.cuda()
-                # ---- rescale ----
-                trainsize = int(round(args.init_trainsize*rate/32)*32)
-                images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                # ---- forward ----
-                with torch.cuda.amp.autocast(enabled=args.amp):
-                    map4, map3, map2, map1 = model(images)
-                    map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                    loss = structure_loss(map1, gts) + structure_loss(map2, gts) + structure_loss(map3, gts) + structure_loss(map4, gts)
-                # ---- metrics ----
-                dice_score = dice_m(map4, gts)
-                iou_score = iou_m(map4, gts)
-                # ---- backward ----
-                if args.amp:
-                    scaler.scale(loss).backward()
-                    if (i + 1) % args.accum_iter == 0:
-                        scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                        scaler.step(optimizer)
-                        scaler.update()
-                        optimizer.zero_grad()
-                else:
-                    loss.backward()
-                    if (i + 1) % args.accum_iter == 0:
-                        clip_gradient(optimizer, args.clip)
-                        optimizer.step()
-                        optimizer.zero_grad()
-                # ---- recording loss ----
-                if rate == 1:
-                    loss_record.update(loss.data, args.batchsize)
-                    dice.update(dice_score.data, args.batchsize)
-                    iou.update(iou_score.data, args.batchsize)
+            images, gts = pack
+            images = images.cuda()
+            gts = gts.cuda()
+            # ---- rescale ----
+            # trainsize = int(round(args.init_trainsize*rate/32)*32)
+            # images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+            # gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+            # ---- forward ----
+            with torch.cuda.amp.autocast(enabled=args.amp):
+                map4, map3, map2, map1 = model(images)
+                # map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                # map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                # map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                # map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                loss = structure_loss(map1, gts) + structure_loss(map2, gts) + structure_loss(map3, gts) + structure_loss(map4, gts)
+            # ---- metrics ----
+            dice_score = dice_m(map4, gts)
+            iou_score = iou_m(map4, gts)
+            # ---- backward ----
+            if args.amp:
+                scaler.scale(loss).backward()
+                if (i + 1) % args.accum_iter == 0:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+            else:
+                loss.backward()
+                if (i + 1) % args.accum_iter == 0:
+                    clip_gradient(optimizer, args.clip)
+                    optimizer.step()
+                    optimizer.zero_grad()
+            # ---- recording loss ----
+            # if rate == 1:
+            loss_record.update(loss.item(), args.batchsize)
+            dice.update(dice_score.item(), args.batchsize)
+            iou.update(iou_score.item(), args.batchsize)
 
-            # ---- train visualization ----
-            if i == total_step:
-                print('{} Training Epoch [{:03d}/{:03d}], '
-                        '[loss: {:0.4f}, dice: {:0.4f}, iou: {:0.4f}], time: {:4.2f}s'.
-                        format(datetime.now(), epoch, args.num_epochs,\
-                                loss_record.show(), 
-                                dice.show(), 
-                                iou.show(),
-                                (datetime.now()-start_time).total_seconds()))
-                writer.add_scalar('train/train_loss', loss_record.show(), epoch)
-                writer.add_scalar('train/train_mDice', dice.show(), epoch)
-                writer.add_scalar('train/train_mIoU', iou.show(), epoch)
-                writer.add_scalar('train/time', (datetime.now()-start_time).total_seconds(), epoch)
+        print('{} Training Epoch [{:03d}/{:03d}], '
+                '[loss: {:0.4f}, dice: {:0.4f}, iou: {:0.4f}], time: {:4.2f}s'.
+                format(datetime.now(), epoch, args.num_epochs,\
+                        loss_record.show(), 
+                        dice.show(), 
+                        iou.show(),
+                        (datetime.now()-start_time).total_seconds()))
+
+        writer.add_scalar('train/train_loss', loss_record.show(), epoch)
+        writer.add_scalar('train/train_mDice', dice.show(), epoch)
+        writer.add_scalar('train/train_mIoU', iou.show(), epoch)
+        writer.add_scalar('train/time', (datetime.now()-start_time).total_seconds(), epoch)
 
     ckpt_path = save_path + f'/snapshots/{epoch}.pth'
     print('[Saving Checkpoint:]', ckpt_path)
@@ -393,29 +401,46 @@ def main():
     else:
         data_damage = json.load(open("/mnt/tuyenld/data/endoscopy/processed/polyp.json"))
 
+    # Transform
+    train_transform = A.Compose([
+        A.RandomRotate90(),
+        A.Flip(),
+        # A.D4(),
+        A.HueSaturationValue(),
+        A.RandomBrightnessContrast(),
+        A.GaussianBlur(),
+        A.OneOf([
+            A.RandomCrop(224, 224, p=1),
+            A.CenterCrop(224, 224, p=1)
+        ], p=0.2),
+        A.Resize(args.init_trainsize, args.init_trainsize)
+    ], p=1.0)
+
     # Build the dataloader
     train_img_paths = data_damage["train"]["images"]
     train_mask_paths = data_damage["train"]["masks"]
     
-    train_dataset = Dataset(train_img_paths, train_mask_paths, prefix_path="/mnt/tuyenld/data/endoscopy/")
+    train_dataset = Dataset(train_img_paths, train_mask_paths, img_size=args.init_trainsize, prefix_path=args.prefix_path, transform=train_transform)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batchsize,
         shuffle=True,
         pin_memory=True,
-        drop_last=True
+        drop_last=True,
+        num_workers=args.num_workers
     )
     
     # Build validation dataloader
     val_img_paths = data_damage["test"]["images"]
     val_mask_paths = data_damage["test"]["masks"]
-    val_dataset = Dataset(val_img_paths, val_mask_paths, prefix_path="/mnt/tuyenld/data/endoscopy/")
+    val_dataset = Dataset(val_img_paths, val_mask_paths, img_size=args.init_trainsize, prefix_path=args.prefix_path)
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
-        batch_size=args.batchsize,
-        shuffle=True,
-        pin_memory=True,
-        drop_last=True
+        batch_size=args.test_batchsize,
+        shuffle=False,
+        pin_memory=False,
+        drop_last=False,
+        num_workers=args.num_workers
     )
 
     # Build the model

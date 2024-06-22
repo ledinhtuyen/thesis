@@ -3,6 +3,7 @@ import logging
 import os
 import os.path as osp
 from tqdm import tqdm
+import cv2
 
 import torch
 import torch.nn as nn
@@ -27,8 +28,8 @@ from mmseg.registry import MODELS
 init_default_scope('mmseg')
 
 def segment_loss(pred, mask, type):
-    pred_ = pred[(type >= 1) & (type <= 5) | (type == 7)]
-    mask_ = mask[(type >= 1) & (type <= 5) | (type == 7)]
+    pred_ = pred[(type >= 1) & (type <= 6)]
+    mask_ = mask[(type >= 1) & (type <= 6)]
     return torch.nansum(structure_loss(pred_, mask_))
   
 def cls_loss(pred, label, type=None):
@@ -42,8 +43,8 @@ def cls_loss(pred, label, type=None):
 
 def bi_cls_loss(pred, label, type):
     # hp classification
-    pred_ = torch.flatten(pred[type == 6])
-    label_ = label[type == 6].float()
+    pred_ = torch.flatten(pred[type == 5])
+    label_ = label[type == 5].float()
     return torch.nansum(nn.BCEWithLogitsLoss()(pred_, label_))
 
 class CalcMetric:
@@ -57,15 +58,24 @@ class CalcMetric:
         if i == 0:
           pred = output["pos"][type == 0].cpu()
           label = cls_label[type == 0]
-        elif i >= 1 and i <= 5:
-          pred = output["map"][0][type == i].cpu()
+        elif i >= 1 and i <= 6 and i != 5:
+          pred = output["map"][0][type == i].cpu().sigmoid().round()
           label = masks[type == i]
-        elif i == 6:
-          pred = torch.sigmoid(torch.flatten(output["hp"][type == 6])).cpu()
-          label = cls_label[type == 6]
+        elif i == 5:
+            pred = output["map"][0][type == 5].cpu().sigmoid().round()
+            label = masks[type == 5]
+
+            pred_cls = torch.flatten(output["hp"][type == 5]).cpu().sigmoid()
+            label_cls = cls_label[type == 5]
+            if "hp" in self.pred:
+                self.pred["hp"] = torch.cat((self.pred["hp"], pred_cls)) # hp
+                self.gts["hp"] = torch.cat((self.gts["hp"], label_cls)) # hp
+            else:
+                self.pred["hp"] = pred_cls
+                self.gts["hp"] = label_cls
         elif i == 7:
-          pred = output["map"][0][type == 7].cpu()
-          label = masks[type == 7]
+          pred = output["type"].cpu()
+          label = type
         
         if i in self.pred:
           self.pred[i] = torch.cat((self.pred[i], pred))
@@ -74,29 +84,43 @@ class CalcMetric:
           self.pred[i] = pred
           self.gts[i] = label
     
-    def calc_cls_metric(self, type, epoch):
+    def calc_cls_metric(self, type, epoch, save_path):
         if type == 0:
             class_names = ["Hầu họng", "Thực quản", "Tam vị", "Thân vị", "Phình vị", "Hang vị", "Bờ cong lớn", "Bờ cong nhỏ", "Hành tá tràng", "Tá tràng"]
             macro_acc = Accuracy(task="multiclass", num_classes=10, average="macro")
             micro_acc = Accuracy(task="multiclass", num_classes=10, average="micro")
             confmat = ConfusionMatrix(task="multiclass", num_classes=10)
-        elif type == 6:
+            pred = self.pred[type]
+            gts = self.gts[type]
+        elif type == 5:
             class_names = ["Lành tính", "Ác tính"]
             macro_acc = Accuracy(task="binary", num_classes=2, average="macro")
             micro_acc = Accuracy(task="binary", num_classes=2, average="micro")
             confmat = ConfusionMatrix(task="binary", num_classes=2)
+            pred = self.pred["hp"]
+            gts = self.gts["hp"]
+        elif type == 7:
+            class_names = ["VTGP", "UTTQ", "VTQ", "VLHTT", "UTDD", "VDD/HP", "POLYP"]
+            macro_acc = Accuracy(task="multiclass", num_classes=7, average="macro")
+            micro_acc = Accuracy(task="multiclass", num_classes=7, average="micro")
+            confmat = ConfusionMatrix(task="multiclass", num_classes=7)
+            pred = self.pred[type]
+            gts = self.gts[type]
 
-        macro_acc_ = macro_acc(self.pred[type], self.gts[type])
-        micro_acc_ = micro_acc(self.pred[type], self.gts[type])
-        confusion_matrix = confmat(self.pred[type], self.gts[type])
+        macro_acc_ = macro_acc(pred, gts)
+        micro_acc_ = micro_acc(pred, gts)
+        confusion_matrix = confmat(pred, gts)
         conf_img = plot_confusion_matrix(confusion_matrix, class_names, normalize=True)
         
+        # Save image
+        cv2.imwrite(f'{save_path}/imgs/cls_{type}_confusion_matrix_{epoch}.png', conf_img)
+
         self.writer.add_scalar(f'cls_{type}/macro_acc', macro_acc_, epoch)
         self.writer.add_scalar(f'cls_{type}/micro_acc', micro_acc_, epoch)
         self.writer.add_image(f'cls_{type}/confusion_matrix', conf_img, epoch, dataformats='HWC')
 
     def calc_seg_metric(self, type, epoch):
-        self.pred[type] = self.pred[type].data.sigmoid().round().data.squeeze()
+        self.pred[type] = self.pred[type].data.squeeze()
         self.gts[type] = self.gts[type].data.squeeze()
 
         macro_iou, macro_dice, _, _ = get_macro_scores(self.pred[type], self.gts[type])
@@ -130,8 +154,6 @@ def parse_args():
                         default='metadata.json', help='metadata file')
     parser.add_argument('--prefix_path', type=str,
                         default='/mnt/tuyenld/data/endoscopy/', help='prefix path')
-    parser.add_argument('--type_damage', type=str,
-                        default='', help='type of damage')
     parser.add_argument('--clip', type=float,
                         default=1.0, help='gradient clipping margin')
     parser.add_argument('--work-dir', help='the dir to save logs and models')
@@ -173,7 +195,7 @@ def train(train_loader,
     met.add_meter(['all_loss', 'seg_loss', 'hp_loss', 'pos_loss', 'type_loss'])
     total_step = len(train_loader)
     if args.amp:
-        scaler = torch.cuda.amp.GradScaler()
+        scaler = torch.cuda.amp.GradScaler(init_scale=2**14, enabled=args.amp)
     with torch.autograd.set_detect_anomaly(True):
         start_time = datetime.now()
         optimizer.zero_grad()
@@ -245,7 +267,7 @@ def train(train_loader,
     }
     torch.save(checkpoint, ckpt_path)
 
-def test(test_dataloader, model, epoch, writer, args):
+def test(test_dataloader, model, epoch, save_path, writer, args):
     print_log(f"Testing on epoch {epoch}", logger=logging.getLogger())
     model.eval()
     met = CalcMetric(writer)
@@ -259,8 +281,11 @@ def test(test_dataloader, model, epoch, writer, args):
             met.add(output, masks, cls_label, type)
         
         for i in range(8):
-          if i == 0 or i == 6:
-            met.calc_cls_metric(i, epoch)
+          if i == 0 or i == 7:
+            met.calc_cls_metric(i, epoch, save_path)
+          elif i == 5:
+            met.calc_cls_metric(i, epoch, save_path)
+            met.calc_seg_metric(i, epoch)
           else:
             met.calc_seg_metric(i, epoch)
 
@@ -290,6 +315,7 @@ def main():
     if not os.path.exists(save_path):
         os.makedirs(save_path + '/snapshots', exist_ok=True)
         os.makedirs(save_path + '/logs', exist_ok=True)
+        os.makedirs(save_path + '/imgs', exist_ok=True)
         
         # Init tensorboard
         writer = SummaryWriter(save_path + '/logs')
@@ -306,14 +332,13 @@ def main():
         # A.D4(),
         A.HueSaturationValue(),
         A.RandomBrightnessContrast(),
-        A.GridDistortion(),
-        A.MotionBlur(),
+        A.GaussianBlur(),
         A.OneOf([
             A.RandomCrop(224, 224, p=1),
             A.CenterCrop(224, 224, p=1)
         ], p=0.2),
         A.Resize(args.init_trainsize, args.init_trainsize)
-    ], p=0.5)
+    ], p=1.0)
 
     # Build the data
     data = Data(args.metadata_file)
@@ -367,7 +392,7 @@ def main():
               save_path, 
               writer, 
               args)
-        test(val_loader, model, epoch, writer, args)
+        test(val_loader, model, epoch, save_path, writer, args)
 
 if __name__ == '__main__':
     main()

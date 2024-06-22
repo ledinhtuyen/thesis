@@ -9,7 +9,7 @@ def get_gpu_memory():
 
 while True:
   memory_card = get_gpu_memory()
-  if memory_card[0] >= 16500:
+  if memory_card[1] >= 15000:
     print("GPU memory is enough to run pretrain")
-    os.system("/bin/bash ./scripts/run_pretrain.sh")
+    os.system("/bin/bash train_multitask.sh")
     break

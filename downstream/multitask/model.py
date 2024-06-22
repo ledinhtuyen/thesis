@@ -49,7 +49,7 @@ class MultiTask(nn.Module):
         self.head_seg = self.build_head_segment()
         self.head_cls_hp = self.build_head_cls(1)
         self.head_cls_positon = self.build_head_cls(10)
-        self.head_type = self.build_head_cls(8)
+        self.head_type = self.build_head_cls(7)
 
     def build_head_segment(self):
         head_segment = nn.ModuleDict()
