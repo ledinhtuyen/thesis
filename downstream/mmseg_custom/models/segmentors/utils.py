@@ -1,14 +1,6 @@
-import math
-from turtle import forward
-
+import torch
 from torch import nn
 import torch.nn.functional as F
-import re
-import math
-import collections
-from functools import partial
-import torch
-from torch.utils import model_zoo
 
 class ConvUp(nn.Module):
     def __init__(self,in_channel=128,out_channel=128,activate = False,final=False):
@@ -51,10 +43,6 @@ class BasicConv2d(nn.Module):
         x = self.bn(x)
         return x
 
-def nms(dets, thresh):
-    return nms_torch(dets[:, :4], dets[:, 4], thresh)
-
-
 class SeparableConvBlock(nn.Module):
     """
     created by Zylo117
@@ -94,84 +82,7 @@ class SeparableConvBlock(nn.Module):
             x = self.swish(x)
 
         return x
-
-
-class NeoReverseAttention(nn.Module):
-    def __init__(self,channel,latenchannel = None) -> None:
-        super(NeoReverseAttention,self).__init__()
-        self.ra_conv1 = BasicConv2d(channel*3//2, channel//2, kernel_size=1)
-        self.ra_conv2 = BasicConv2d(channel//2, channel//2, kernel_size=3, padding=1)     
-        if latenchannel == None: 
-            self.latenconv = BasicConv2d(channel, 3, kernel_size=1)
-            self.stemconv = BasicConv2d(channel, channel//2, kernel_size=1)
-        self.latenchannel = latenchannel
-        self.ra_conv3 = BasicConv2d(channel//2, channel, kernel_size=1)
-        
-        self.channel =channel
-        self.softmax = torch.nn.Softmax(1)
-    def expand(self,inputs,res):
-        x1 = torch.unsqueeze(inputs[:,0,:,:],1)
-        x2 = torch.unsqueeze(inputs[:,1,:,:],1)
-        x3 = torch.unsqueeze(inputs[:,2,:,:],1)
-        x1 = x1.expand(-1,self.channel//2,-1,-1).mul(res)
-        x2 = x2.expand(-1,self.channel//2,-1,-1).mul(res)
-        x3 = x3.expand(-1,self.channel//2,-1,-1).mul(res)
-        output = torch.cat((x1,x2,x3),1)
-        return output
-    def forward(self,inputs,latenmap ):
-        if self.latenchannel == None:
-            latenmap_ = self.latenconv(latenmap)
-            inputs = self.stemconv(inputs)
-        else:
-            latenmap_ = latenmap
-        x = -1*(self.softmax(latenmap_)) + 1
-        x = self.expand(x,inputs)#x.expand(-1, self.channel, -1, -1).mul(inputs)
-        
-        x = self.ra_conv1(x)
-        x = F.relu(self.ra_conv2(x))
-        x =  F.relu(self.ra_conv3(x))
-        if self.latenchannel == None:
-            return x + latenmap
-        else:
-            return x + inputs        
-class NeoReverseAttentionv2(nn.Module):
-    def __init__(self,channel,latenchannel = None) -> None:
-        super(NeoReverseAttentionv2,self).__init__()
-        self.ra_conv1 = BasicConv2d(channel*3, channel, kernel_size=1)
-        self.ra_conv2 = BasicConv2d(channel, channel, kernel_size=5, padding=2)     
-        if latenchannel == None: 
-            self.latenconv = BasicConv2d(channel, 3, kernel_size=1)
-            self.stemconv = BasicConv2d(channel, channel, kernel_size=1)
-        self.latenchannel = latenchannel
-        self.ra_conv3 = BasicConv2d(channel, channel, kernel_size=1)
-        
-        self.channel =channel
-        self.softmax = torch.nn.Softmax(1)
-    def expand(self,inputs,res):
-        x1 = torch.unsqueeze(inputs[:,0,:,:],1)
-        x2 = torch.unsqueeze(inputs[:,1,:,:],1)
-        x3 = torch.unsqueeze(inputs[:,2,:,:],1)
-        x1 = x1.expand(-1,self.channel,-1,-1).mul(res)
-        x2 = x2.expand(-1,self.channel,-1,-1).mul(res)
-        x3 = x3.expand(-1,self.channel,-1,-1).mul(res)
-        output = torch.cat((x1,x2,x3),1)
-        return output
-    def forward(self,inputs,latenmap ):
-        if self.latenchannel == None:
-            latenmap_ = self.latenconv(latenmap)
-            inputs = self.stemconv(inputs)
-        else:
-            latenmap_ = latenmap
-        x = -1*(self.softmax(latenmap_)) + 1
-        x = self.expand(x,inputs)#x.expand(-1, self.channel, -1, -1).mul(inputs)
-        
-        x = self.ra_conv1(x)
-        x = F.relu(self.ra_conv2(x))
-        x =  F.relu(self.ra_conv3(x))
-        if self.latenchannel == None:
-            return x + latenmap
-        else:
-            return x + inputs              
+          
 class ReverseAttention(nn.Module):
     def __init__(self,channel,latenchannel = None,bottle_neck=True) -> None:
         super(ReverseAttention,self).__init__()
@@ -211,7 +122,7 @@ class BiRAFPN(nn.Module):
     """
 
     def __init__(self, num_channels, conv_channels, first_time=False, epsilon=1e-4, onnx_export=True, attention=True,
-                 use_p8=False,neo=False,bottleneck= True):
+                 use_p8=False,bottleneck= True):
         """
         Args:
             num_channels:
@@ -309,23 +220,11 @@ class BiRAFPN(nn.Module):
         self.p6_w2_relu = nn.ReLU()
         self.p7_w2 = nn.Parameter(torch.ones(2, dtype=torch.float32), requires_grad=True)
         self.p7_w2_relu = nn.ReLU()
-        if neo:
-            if bottleneck:
-                self.RA_p7_6 = NeoReverseAttention(num_channels)
-                self.RA_p6_5 = NeoReverseAttention(num_channels)
-                self.RA_p5_4 = NeoReverseAttention(num_channels)
-                self.RA_p4_3 = NeoReverseAttention(num_channels)
-            else:
-                print("using v2 neo")
-                self.RA_p7_6 = NeoReverseAttentionv2(num_channels)
-                self.RA_p6_5 = NeoReverseAttentionv2(num_channels)
-                self.RA_p5_4 = NeoReverseAttentionv2(num_channels)
-                self.RA_p4_3 = NeoReverseAttentionv2(num_channels)
-        else:
-            self.RA_p7_6 = ReverseAttention(num_channels,bottle_neck=bottleneck)
-            self.RA_p6_5 = ReverseAttention(num_channels,bottle_neck=bottleneck)
-            self.RA_p5_4 = ReverseAttention(num_channels,bottle_neck=bottleneck)
-            self.RA_p4_3 = ReverseAttention(num_channels,bottle_neck=bottleneck)
+
+        self.RA_p7_6 = ReverseAttention(num_channels,bottle_neck=bottleneck)
+        self.RA_p6_5 = ReverseAttention(num_channels,bottle_neck=bottleneck)
+        self.RA_p5_4 = ReverseAttention(num_channels,bottle_neck=bottleneck)
+        self.RA_p4_3 = ReverseAttention(num_channels,bottle_neck=bottleneck)
         self.attention = attention
 
     def forward(self, inputs):

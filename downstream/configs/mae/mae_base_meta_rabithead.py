@@ -1,5 +1,4 @@
-pretrained = "/mnt/tuyenld/mae/pretrain/runs/pretrainv2/continue_pretrain/weight/epoch_90.pth"
-norm_cfg = dict(type='BN', requires_grad=True)
+pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/continue_pretrain/weight/last.pth"
 model = dict(
     type='EncoderDecoderRaBiT',
     pretrained=pretrained,
@@ -13,12 +12,4 @@ model = dict(
     decode_head=None,
     train_cfg=dict(),
     test_cfg=dict(mode='whole')
-)
-
-test_path = dict(
-    Kvasir="/home/s/tuyenld/DATA/public_dataset/TestDataset/Kvasir",
-    CVC_ClinicDB="/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ClinicDB",
-    CVC_ColonDB="/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-ColonDB",
-    CVC_T="/home/s/tuyenld/DATA/public_dataset/TestDataset/CVC-300",
-    ETIS_Larib="/home/s/tuyenld/DATA/public_dataset/TestDataset/ETIS-LaribPolypDB",
 )

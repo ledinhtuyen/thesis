@@ -2,6 +2,8 @@ import argparse
 import logging
 import os
 import os.path as osp
+from PIL import Image
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -13,9 +15,9 @@ import numpy as np
 import cv2
 from tqdm import tqdm
 from glob import glob
-
 import albumentations as A
 
+import hiera.hiera
 from utils import clip_gradient, AvgMeter
 from datetime import datetime
 import json
@@ -26,6 +28,8 @@ from mmengine.config import Config, DictAction
 from mmengine.logging import print_log
 from mmseg.registry import MODELS
 init_default_scope('mmseg')
+
+import hiera
 
 class Dataset(torch.utils.data.Dataset):
     
@@ -43,8 +47,8 @@ class Dataset(torch.utils.data.Dataset):
     def __getitem__(self, idx):
         img_path = self.img_paths[idx]
         mask_path = self.mask_paths[idx]
-        image = cv2.imread(osp.join(self.prefix_path, img_path))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = Image.open(osp.join(self.prefix_path, img_path))
+        image = np.array(image)
         mask = cv2.imread(osp.join(self.prefix_path, mask_path), 0)
 
         if self.transform is not None:
@@ -176,9 +180,33 @@ def structure_loss(pred, mask):
     wiou = 1 - (inter + 1)/(union - inter+1)
     return (wfocal + wiou).mean()
 
+class DiceBCELoss(nn.Module):
+    def __init__(self):
+        super(DiceBCELoss, self).__init__()
+
+    def forward(self, inputs, targets, smooth=1):
+        # print(inputs.size(), targets.size())
+        #comment out if your model contains a sigmoid or equivalent activation layer
+        
+        #flatten label and prediction tensors
+        # inputs = inputs.view(-1)
+        # targets = targets.view(-1)
+        inputs = torch.flatten(inputs)
+        targets = torch.flatten(targets.float())
+        
+        inputs_ = torch.sigmoid(inputs)
+        
+        intersection = (inputs_ * targets).sum()      
+        dice_loss = 1 - (2.*intersection + smooth)/(inputs_.sum() + targets.sum() + smooth)  
+        BCE = F.binary_cross_entropy_with_logits(inputs, targets, reduction='mean')
+        Dice_BCE = torch.nansum(BCE) + torch.nansum(dice_loss)
+        
+        return Dice_BCE
+
 def parse_args():
     parser = argparse.ArgumentParser(description='Train')
-    parser.add_argument('config', help='train config file path')
+    parser.add_argument('--config', type=str,
+                        default='', help='config file')
     parser.add_argument('--warmup_epochs', type=int,
                         default=2, help='epoch number')
     parser.add_argument('--num_epochs', type=int,
@@ -197,6 +225,12 @@ def parse_args():
                         default='/mnt/tuyenld/data/endoscopy/', help='prefix path')
     parser.add_argument('--num_workers', type=int,
                         default=16, help='test batch size')
+    parser.add_argument('--seed', type=int,
+                        default=2024, help='random seed')
+    parser.add_argument('--freeze_backbone', action='store_true',
+                        default=False, help='freeze the backbone params')
+    parser.add_argument('--build_with_mmseg', action='store_true',
+                        default=False, help='build with mmseg')
     parser.add_argument('--type_damage', type=str,
                         default='daday', help='type of damage')
     parser.add_argument('--clip', type=float,
@@ -240,8 +274,8 @@ def train(train_loader,
     # size_rates = [0.75, 1, 1.25]
     # size_rates = [0.7, 1, 1.37]
     loss_record = AvgMeter()
-    dice, iou = AvgMeter(), AvgMeter()
     total_step = len(train_loader)
+    criterion = structure_loss
     if args.amp:
         scaler = torch.cuda.amp.GradScaler(init_scale=2**13)
     with torch.autograd.set_detect_anomaly(True):
@@ -272,10 +306,7 @@ def train(train_loader,
                 # map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
                 # map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
                 # map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                loss = structure_loss(map1, gts) + structure_loss(map2, gts) + structure_loss(map3, gts) + structure_loss(map4, gts)
-            # ---- metrics ----
-            dice_score = dice_m(map4, gts)
-            iou_score = iou_m(map4, gts)
+                loss = criterion(map1, gts) + criterion(map2, gts) + criterion(map3, gts) + criterion(map4, gts)
             # ---- backward ----
             if args.amp:
                 scaler.scale(loss).backward()
@@ -294,31 +325,25 @@ def train(train_loader,
             # ---- recording loss ----
             # if rate == 1:
             loss_record.update(loss.item(), args.batchsize)
-            dice.update(dice_score.item(), args.batchsize)
-            iou.update(iou_score.item(), args.batchsize)
 
         print('{} Training Epoch [{:03d}/{:03d}], '
-                '[loss: {:0.4f}, dice: {:0.4f}, iou: {:0.4f}], time: {:4.2f}s'.
+                '[loss: {:0.4f}], time: {:4.2f}s'.
                 format(datetime.now(), epoch, args.num_epochs,\
                         loss_record.show(), 
-                        dice.show(), 
-                        iou.show(),
                         (datetime.now()-start_time).total_seconds()))
 
         writer.add_scalar('train/train_loss', loss_record.show(), epoch)
-        writer.add_scalar('train/train_mDice', dice.show(), epoch)
-        writer.add_scalar('train/train_mIoU', iou.show(), epoch)
         writer.add_scalar('train/time', (datetime.now()-start_time).total_seconds(), epoch)
 
-    ckpt_path = save_path + f'/snapshots/{epoch}.pth'
-    print('[Saving Checkpoint:]', ckpt_path)
-    checkpoint = {
-        'epoch': epoch + 1,
-        'state_dict': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'scheduler': lr_scheduler.state_dict()
-    }
-    torch.save(checkpoint, ckpt_path)
+    # ckpt_path = save_path + f'/snapshots/{epoch}.pth'
+    # print('[Saving Checkpoint:]', ckpt_path)
+    # checkpoint = {
+    #     'epoch': epoch + 1,
+    #     'state_dict': model.state_dict(),
+    #     'optimizer': optimizer.state_dict(),
+    #     'scheduler': lr_scheduler.state_dict()
+    # }
+    # torch.save(checkpoint, ckpt_path)
     
 def test(test_dataloader, model, epoch, writer, args):
     print_log(f"Testing on epoch {epoch}", logger=logging.getLogger())
@@ -363,26 +388,37 @@ def test(test_dataloader, model, epoch, writer, args):
 def main():
     args = parse_args()
     
+    # Set seed
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.backends.cudnn.deterministic = True
+    
     # load config
-    cfg = Config.fromfile(args.config)
-    if args.cfg_options is not None:
-        cfg.merge_from_dict(args.cfg_options)
-        
-    # work_dir is determined in this priority: CLI > segment in file > filename
-    if args.work_dir is not None:
-        # update configs according to CLI args if args.work_dir is not None
-        cfg.work_dir = args.work_dir
-    elif cfg.get('work_dir', None) is None:
-        # use config filename as default work_dir if cfg.work_dir is None
-        cfg.work_dir = osp.join('./work_dirs',
-                                osp.splitext(osp.basename(args.config))[0])
+    if args.build_with_mmseg:
+        cfg = Config.fromfile(args.config)
+        if args.cfg_options is not None:
+            cfg.merge_from_dict(args.cfg_options)
+            
+        # work_dir is determined in this priority: CLI > segment in file > filename
+        if args.work_dir is not None:
+            # update configs according to CLI args if args.work_dir is not None
+            cfg.work_dir = args.work_dir
+        elif cfg.get('work_dir', None) is None:
+            # use config filename as default work_dir if cfg.work_dir is None
+            cfg.work_dir = osp.join('./work_dirs',
+                                    osp.splitext(osp.basename(args.config))[0])
 
-    # resume training
-    cfg.resume = args.resume
+        # resume training
+        cfg.resume = args.resume
     
     # Create a new work_dir
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    save_path = osp.join(cfg.work_dir, timestamp)
+    if args.build_with_mmseg:
+        save_path = osp.join(cfg.work_dir, timestamp)
+    else:
+        save_path = osp.join(args.work_dir, timestamp)
     if not os.path.exists(save_path):
         os.makedirs(save_path + '/snapshots', exist_ok=True)
         os.makedirs(save_path + '/logs', exist_ok=True)
@@ -391,36 +427,40 @@ def main():
         writer = SummaryWriter(save_path + '/logs')
         
         # Save config file to work_dir
-        cfg.dump(save_path + '/config.py')
+        if args.build_with_mmseg:
+            cfg.dump(save_path + '/config.py')
     else:
         print("Save path existed")
 
     if args.type_damage != "polyp":
-        data = json.load(open("/mnt/tuyenld/data/endoscopy/processed/ft_ton_thuong.json"))
+        data = json.load(open("/home/s/tuyenld/endoscopy/ft_ton_thuong.json"))
         data_damage = data[args.type_damage]
     else:
-        data_damage = json.load(open("/mnt/tuyenld/data/endoscopy/processed/polyp.json"))
+        data_damage = json.load(open("/home/s/tuyenld/endoscopy/polyp.json"))
 
     # Transform
     train_transform = A.Compose([
         A.RandomRotate90(),
         A.Flip(),
-        # A.D4(),
         A.HueSaturationValue(),
         A.RandomBrightnessContrast(),
         A.GaussianBlur(),
-        A.OneOf([
-            A.RandomCrop(224, 224, p=1),
-            A.CenterCrop(224, 224, p=1)
-        ], p=0.2),
-        A.Resize(args.init_trainsize, args.init_trainsize)
-    ], p=1.0)
+        # A.OneOf([
+        #     A.RandomCrop(224, 224, p=1),
+        #     A.CenterCrop(224, 224, p=1)
+        # ], p=0.2),
+        # A.Resize(args.init_trainsize, args.init_trainsize)
+    ], p=0.5)
 
     # Build the dataloader
     train_img_paths = data_damage["train"]["images"]
     train_mask_paths = data_damage["train"]["masks"]
     
     train_dataset = Dataset(train_img_paths, train_mask_paths, img_size=args.init_trainsize, prefix_path=args.prefix_path, transform=train_transform)
+    
+    # Train with 10% of the dataset with no random choice and separate
+    # train_dataset = torch.utils.data.Subset(train_dataset, list(range(0, len(train_dataset), 10)))
+    
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batchsize,
@@ -444,7 +484,34 @@ def main():
     )
 
     # Build the model
-    model = MODELS.build(cfg.model).cuda()
+    if args.build_with_mmseg:
+        model = MODELS.build(cfg.model).cuda()
+    else:
+        model = mmseg_custom.models.EncoderDecoderColonFormer(
+            backbone=hiera.hiera_base_224(
+                pretrained=True, checkpoint="mae_in1k_ft_in1k"
+            ),
+            decode_head=dict(
+                type="UPerHead",
+                in_channels=[96, 192, 384, 768],
+                in_index=[0, 1, 2, 3],
+                channels=128,
+                dropout_ratio=0.1,
+                num_classes=2,
+                out_channels=1,
+                norm_cfg=dict(type='BN', requires_grad=True),
+                align_corners=False,
+                loss_decode=dict(
+                    type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0
+                )
+            ),
+            build_with_mmseg=args.build_with_mmseg,
+            in_channels=(192, 384, 768),
+        ).cuda()
+    
+    if args.freeze_backbone:
+        for param in model.backbone.parameters():
+            param.requires_grad = False
     
     params = model.parameters()
     optimizer = torch.optim.Adam(params, args.init_lr)
