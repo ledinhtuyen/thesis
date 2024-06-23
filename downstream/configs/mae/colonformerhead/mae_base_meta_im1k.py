@@ -1,13 +1,13 @@
-pretrained = "/mnt/tuyenld/mae/pretrain/runs/pretrainv2/mae_meta_norm_pix_img224_p16/weight/last.pth"
+pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/vit-base-mae/mae_pretrain_vit_base.pth"
 norm_cfg = dict(type='BN', requires_grad=True)
 model = dict(
-    type='EncoderDecoderV2',
+    type='EncoderDecoderColonFormer',
     pretrained=pretrained,
     backbone=dict(
         type='MaskedAutoencoderViT',
-        downstream_size=352,
+        downstream_size=224,
         num_register_tokens=0,
-        out_indices=(3, 5, 7, 11),
+        out_indices=(2, 5, 8, 11),
     ),
     neck=dict(type='Feature2Pyramid', embed_dim=768, rescales=[4, 2, 1, 0.5]),
     decode_head=dict(
@@ -15,7 +15,7 @@ model = dict(
         in_channels=[768, 768, 768, 768],
         in_index=[0, 1, 2, 3],
         pool_scales=(1, 2, 3, 6),
-        channels=512,
+        channels=128,
         dropout_ratio=0.1,
         num_classes=2,
         out_channels=1, # 1 for binary classification

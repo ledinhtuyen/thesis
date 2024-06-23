@@ -1,11 +1,11 @@
-pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/continue_pretrain/weight/epoch_80.pth"
+pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/mae_meta_norm_pix_img224_p16/weight/last.pth"
 norm_cfg = dict(type='BN', requires_grad=True)
 model = dict(
     type='EncoderDecoderColonFormer',
     pretrained=pretrained,
     backbone=dict(
         type='MaskedAutoencoderViT',
-        downstream_size=384,
+        downstream_size=224,
         num_register_tokens=0,
         out_indices=(2, 5, 8, 11),
     ),
@@ -14,7 +14,8 @@ model = dict(
         type='UPerHead',
         in_channels=[768, 768, 768, 768],
         in_index=[0, 1, 2, 3],
-        channels=512,
+        pool_scales=(1, 2, 3, 6),
+        channels=128,
         dropout_ratio=0.1,
         num_classes=2,
         out_channels=1, # 1 for binary classification
