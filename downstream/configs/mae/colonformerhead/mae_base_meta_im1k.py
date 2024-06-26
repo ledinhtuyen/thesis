@@ -1,4 +1,4 @@
-pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/vit-base-mae/mae_pretrain_vit_base.pth"
+pretrained = "/workspace/mae_base/mae_pretrain_vit_base.pth"
 norm_cfg = dict(type='BN', requires_grad=True)
 model = dict(
     type='EncoderDecoderColonFormer',

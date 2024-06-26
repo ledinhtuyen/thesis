@@ -214,13 +214,16 @@ def train(train_loader,
             masks = masks.cuda()
             cls_labels = cls_labels.cuda()
             # ---- forward ----
-            with torch.cuda.amp.autocast(enabled=args.amp):
+            with torch.cuda.amp.autocast(enabled=args.amp, dtype=torch.bfloat16):
                 output = model(images)
-                seg_loss = segment_loss(output["map"][0], masks, type)
+                seg_loss1 = segment_loss(output["map"][0], masks, type)
+                seg_loss2 = segment_loss(output["map"][1], masks, type)
+                seg_loss3 = segment_loss(output["map"][2], masks, type)
+                seg_loss4 = segment_loss(output["map"][3], masks, type)
                 hp_loss = bi_cls_loss(output["hp"], cls_labels, type)
                 pos_loss = cls_loss(output["pos"], cls_labels, type)
                 type_loss = cls_loss(output["type"], type)
-                loss = seg_loss + hp_loss + pos_loss + type_loss
+                loss = seg_loss1 + seg_loss2 + seg_loss3 + seg_loss4 + hp_loss + pos_loss + type_loss
             # ---- backward ----
             if args.amp:
                 scaler.scale(loss).backward()
@@ -239,7 +242,7 @@ def train(train_loader,
             # ---- recording loss ----
             met.update({
                 'all_loss': loss.data,
-                'seg_loss': seg_loss.data,
+                'seg_loss': seg_loss1.data,
                 'hp_loss': hp_loss.data,
                 'pos_loss': pos_loss.data,
                 'type_loss': type_loss.data
@@ -257,15 +260,15 @@ def train(train_loader,
         writer.add_scalar('train/type_loss', met.get_meter('type_loss').show(), epoch)
         writer.add_scalar('train/time', (datetime.now()-start_time).total_seconds(), epoch)
 
-    ckpt_path = save_path + f'/snapshots/{epoch}.pth'
-    print('[Saving Checkpoint:]', ckpt_path)
-    checkpoint = {
-        'epoch': epoch + 1,
-        'state_dict': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'scheduler': lr_scheduler.state_dict()
-    }
-    torch.save(checkpoint, ckpt_path)
+    # ckpt_path = save_path + f'/snapshots/{epoch}.pth'
+    # print('[Saving Checkpoint:]', ckpt_path)
+    # checkpoint = {
+    #     'epoch': epoch + 1,
+    #     'state_dict': model.state_dict(),
+    #     'optimizer': optimizer.state_dict(),
+    #     'scheduler': lr_scheduler.state_dict()
+    # }
+    # torch.save(checkpoint, ckpt_path)
 
 def test(test_dataloader, model, epoch, save_path, writer, args):
     print_log(f"Testing on epoch {epoch}", logger=logging.getLogger())
@@ -293,25 +296,25 @@ def main():
     args = parse_args()
     
     # load config
-    cfg = Config.fromfile(args.config)
-    if args.cfg_options is not None:
-        cfg.merge_from_dict(args.cfg_options)
+    # cfg = Config.fromfile(args.config)
+    # if args.cfg_options is not None:
+    #     cfg.merge_from_dict(args.cfg_options)
         
-    # work_dir is determined in this priority: CLI > segment in file > filename
-    if args.work_dir is not None:
-        # update configs according to CLI args if args.work_dir is not None
-        cfg.work_dir = args.work_dir
-    elif cfg.get('work_dir', None) is None:
-        # use config filename as default work_dir if cfg.work_dir is None
-        cfg.work_dir = osp.join('./work_dirs',
-                                osp.splitext(osp.basename(args.config))[0])
+    # # work_dir is determined in this priority: CLI > segment in file > filename
+    # if args.work_dir is not None:
+    #     # update configs according to CLI args if args.work_dir is not None
+    #     cfg.work_dir = args.work_dir
+    # elif cfg.get('work_dir', None) is None:
+    #     # use config filename as default work_dir if cfg.work_dir is None
+    #     cfg.work_dir = osp.join('./work_dirs',
+    #                             osp.splitext(osp.basename(args.config))[0])
 
-    # resume training
-    cfg.resume = args.resume
+    # # resume training
+    # cfg.resume = args.resume
     
     # Create a new work_dir
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    save_path = osp.join(cfg.work_dir, timestamp)
+    save_path = osp.join(args.work_dir, timestamp)
     if not os.path.exists(save_path):
         os.makedirs(save_path + '/snapshots', exist_ok=True)
         os.makedirs(save_path + '/logs', exist_ok=True)
@@ -321,30 +324,30 @@ def main():
         writer = SummaryWriter(save_path + '/logs')
         
         # Save config file to work_dir
-        cfg.dump(save_path + '/config.py')
+        # cfg.dump(save_path + '/config.py')
     else:
         print("Save path existed")
         
     # Train data augmentation
-    train_transform = A.Compose([
-        A.RandomRotate90(),
-        A.Flip(),
-        # A.D4(),
-        A.HueSaturationValue(),
-        A.RandomBrightnessContrast(),
-        A.GaussianBlur(),
-        A.OneOf([
-            A.RandomCrop(224, 224, p=1),
-            A.CenterCrop(224, 224, p=1)
-        ], p=0.2),
-        A.Resize(args.init_trainsize, args.init_trainsize)
-    ], p=1.0)
+    # train_transform = A.Compose([
+    #     A.RandomRotate90(),
+    #     A.Flip(),
+    #     # A.D4(),
+    #     A.HueSaturationValue(),
+    #     A.RandomBrightnessContrast(),
+    #     A.GaussianBlur(),
+    #     A.OneOf([
+    #         A.RandomCrop(224, 224, p=1),
+    #         A.CenterCrop(224, 224, p=1)
+    #     ], p=0.2),
+    #     A.Resize(args.init_trainsize, args.init_trainsize)
+    # ], p=1.0)
 
     # Build the data
     data = Data(args.metadata_file)
     
     train_dataset = MultiDataset(data.train_samples, args.prefix_path, 
-                                 img_size=args.init_trainsize, transform=train_transform)
+                                 img_size=args.init_trainsize)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batchsize,
@@ -366,7 +369,30 @@ def main():
     )
 
     # Build the model
-    model = MODELS.build(cfg.model).cuda()
+    # model = MODELS.build(cfg.model).cuda()
+    import hiera
+    backbone = hiera.hiera_base_224()
+    backbone.load_state_dict(torch.load('/workspace/hiera/examples/runs/state_dict.pth'))
+    model = multitask.model.MultiTask(
+        backbone=backbone,
+        decode_head=dict(
+            type="UPerHead",
+            in_channels=[96, 192, 384, 768],
+            in_index=[0, 1, 2, 3],
+            channels=128,
+            dropout_ratio=0.1,
+            num_classes=2,
+            out_channels=1,
+            norm_cfg=dict(type='BN', requires_grad=True),
+            align_corners=False,
+            loss_decode=dict(
+                type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0
+            )
+        ),
+        build_with_mmseg=False,
+        in_channels=(192, 384, 768),
+    ).cuda()
+    
     
     params = model.parameters()
     optimizer = torch.optim.Adam(params, args.init_lr)

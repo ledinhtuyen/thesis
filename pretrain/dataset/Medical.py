@@ -5,6 +5,7 @@ import PIL
 
 import torch
 import numpy as np
+import cupy as cp
 import torchvision.transforms as transforms
 from torchvision.io import read_image
 from torch.utils.data import Dataset, DataLoader
@@ -44,18 +45,23 @@ def mean_and_std(train_data, prefix_path, meanstd_file):
     if os.path.isfile(meanstd_file):
         meanstd = torch.load(meanstd_file)
     else:
-        mean = torch.zeros(3)
-        std = torch.zeros(3)
-
-        for img_path in train_data:
-            img = read_image(os.path.join(prefix_path, img_path)) / 255.0
-            mean += img.mean(dim=(1, 2))
-            std += img.std(dim=(1, 2))
+        means, stds = [], []
+        for i, img_path in enumerate(train_data):
+            print(f"Processing image {i+1}/{len(train_data)}")
+            img = PIL.Image.open(Path(prefix_path) / img_path)
+            img = np.array(img) / 255.0
+            img = cp.asarray(img)
+            mean = cp.mean(img, axis=(0, 1))
+            std = cp.std(img, axis=(0, 1))
             
-        mean /= len(train_data)
-        std /= len(train_data)
+            means.append(mean.get())  # Transfer result back to CPU
+            stds.append(std.get())    # Transfer result back to CPU
+        
+        mean = np.mean(means, axis=0)
+        std = np.mean(stds, axis=0)
         meanstd = {'mean': mean, 'std': std}
         torch.save(meanstd, meanstd_file)
+        print("Mean and std: ", meanstd)
     # END CODE
     return meanstd
 
@@ -85,14 +91,33 @@ class PretrainMedical(Dataset):
         return img
     
 if __name__ == '__main__':
-    meanstd = torch.load("/mnt/tuyenld/mae/configs/meanstd.pth")
-    # medical_data = Medical(Path("/home/s/tuyenld/DATA"), Path("/home/s/tuyenld/endoscopy/pretrain.json"))
-    test_dataset = PretrainMedical(train=False, 
-                                    json_file="/mnt/tuyenld/mae/configs/test.json",
-                                    meanstd_file="/mnt/tuyenld/mae/configs/meanstd.pth",
-                                    prefix_path="/home/s/DATA")
-    # test_dataset = PretrainMedical(medical_data.get_test_data(), train=False)
-    # train_dataloader = DataLoader(train_dataset, batch_size=32, num_workers=4)
-    # print(mean_and_std(medical_data.get_train_data(), "/home/s/tuyenld/DATA", "/home/s/tuyenld/mae/configs/meanstd.pth"))
-    for data in test_dataset:
-        print(data)
+    # meanstd = torch.load("/mnt/tuyenld/mae/configs/meanstd.pth")
+    # # medical_data = Medical(Path("/home/s/tuyenld/DATA"), Path("/home/s/tuyenld/endoscopy/pretrain.json"))
+    # test_dataset = PretrainMedical(train=False, 
+    #                                 json_file="/mnt/tuyenld/mae/configs/test.json",
+    #                                 meanstd_file="/mnt/tuyenld/mae/configs/meanstd.pth",
+    #                                 prefix_path="/home/s/DATA")
+    # # test_dataset = PretrainMedical(medical_data.get_test_data(), train=False)
+    # # train_dataloader = DataLoader(train_dataset, batch_size=32, num_workers=4)
+    # # print(mean_and_std(medical_data.get_train_data(), "/home/s/tuyenld/DATA", "/home/s/tuyenld/mae/configs/meanstd.pth"))
+    # for data in test_dataset:
+    #     print(data)
+    # Multi processing calculate mean and std
+    # import multiprocessing
+    # from functools import partial
+    # from multiprocessing import Pool
+    # from itertools import repeat
+    
+    data = json.load(open('/workspace/endoscopy/pretrain.json'))
+    train_data = data["train"]
+    prefix_path = "/workspace/DATA2"
+    meanstd_file = "/workspace/DATA2/meanstd_with_extract.pth"
+    mean_and_std(train_data, prefix_path, meanstd_file)
+
+    # num_workers = 48
+    # pool = Pool(num_workers)
+    # meanstd = pool.map(partial(mean_and_std, prefix_path=prefix_path, meanstd_file=meanstd_file), repeat(train_data, num_workers))
+    # pool.join()
+    # pool.close()
+    
+    

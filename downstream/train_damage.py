@@ -272,12 +272,12 @@ def train(train_loader,
     model.train()
     # ---- multi-scale training ----
     # size_rates = [0.75, 1, 1.25]
-    # size_rates = [0.7, 1, 1.37]
+    size_rates = [0.7, 1, 1.37]
     loss_record = AvgMeter()
     total_step = len(train_loader)
     criterion = structure_loss
     if args.amp:
-        scaler = torch.cuda.amp.GradScaler(init_scale=2**13)
+        scaler = torch.cuda.amp.GradScaler()
     with torch.autograd.set_detect_anomaly(True):
         start_time = datetime.now()
         optimizer.zero_grad()
@@ -289,42 +289,42 @@ def train(train_loader,
             
             writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], (epoch-1) * total_step + i)
 
-            # for rate in size_rates: 
+            for rate in size_rates: 
                 # optimizer.zero_grad()
                 # ---- data prepare ----
-            images, gts = pack
-            images = images.cuda()
-            gts = gts.cuda()
-            # ---- rescale ----
-            # trainsize = int(round(args.init_trainsize*rate/32)*32)
-            # images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-            # gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-            # ---- forward ----
-            with torch.cuda.amp.autocast(enabled=args.amp):
-                map4, map3, map2, map1 = model(images)
-                # map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                # map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                # map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                # map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
-                loss = criterion(map1, gts) + criterion(map2, gts) + criterion(map3, gts) + criterion(map4, gts)
-            # ---- backward ----
-            if args.amp:
-                scaler.scale(loss).backward()
-                if (i + 1) % args.accum_iter == 0:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-            else:
-                loss.backward()
-                if (i + 1) % args.accum_iter == 0:
-                    clip_gradient(optimizer, args.clip)
-                    optimizer.step()
-                    optimizer.zero_grad()
-            # ---- recording loss ----
-            # if rate == 1:
-            loss_record.update(loss.item(), args.batchsize)
+                images, gts = pack
+                images = images.cuda()
+                gts = gts.cuda()
+                # ---- rescale ----
+                trainsize = int(round(args.init_trainsize*rate/32)*32)
+                images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                # ---- forward ----
+                with torch.cuda.amp.autocast(enabled=args.amp, dtype=torch.bfloat16):
+                    map4, map3, map2, map1 = model(images)
+                    map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                    map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                    map3 = F.interpolate(map3, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                    map4 = F.interpolate(map4, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
+                    loss = criterion(map1, gts) + criterion(map2, gts) + criterion(map3, gts) + criterion(map4, gts)
+                # ---- backward ----
+                if args.amp:
+                    scaler.scale(loss).backward()
+                    if (i + 1) % args.accum_iter == 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip)
+                        scaler.step(optimizer)
+                        scaler.update()
+                        optimizer.zero_grad()
+                else:
+                    loss.backward()
+                    if (i + 1) % args.accum_iter == 0:
+                        clip_gradient(optimizer, args.clip)
+                        optimizer.step()
+                        optimizer.zero_grad()
+                # ---- recording loss ----
+                if rate == 1:
+                    loss_record.update(loss.item(), args.batchsize)
 
         print('{} Training Epoch [{:03d}/{:03d}], '
                 '[loss: {:0.4f}], time: {:4.2f}s'.
@@ -433,10 +433,10 @@ def main():
         print("Save path existed")
 
     if args.type_damage != "polyp":
-        data = json.load(open("/home/s/tuyenld/endoscopy/ft_ton_thuong.json"))
+        data = json.load(open("/workspace/endoscopy/ft_ton_thuong.json"))
         data_damage = data[args.type_damage]
     else:
-        data_damage = json.load(open("/home/s/tuyenld/endoscopy/polyp.json"))
+        data_damage = json.load(open("/workspace/endoscopy/polyp.json"))
 
     # Transform
     train_transform = A.Compose([
@@ -445,11 +445,11 @@ def main():
         A.HueSaturationValue(),
         A.RandomBrightnessContrast(),
         A.GaussianBlur(),
-        # A.OneOf([
-        #     A.RandomCrop(224, 224, p=1),
-        #     A.CenterCrop(224, 224, p=1)
-        # ], p=0.2),
-        # A.Resize(args.init_trainsize, args.init_trainsize)
+        A.OneOf([
+            A.RandomCrop(224, 224, p=1),
+            A.CenterCrop(224, 224, p=1)
+        ], p=0.2),
+        A.Resize(args.init_trainsize, args.init_trainsize)
     ], p=0.5)
 
     # Build the dataloader
@@ -487,24 +487,25 @@ def main():
     if args.build_with_mmseg:
         model = MODELS.build(cfg.model).cuda()
     else:
-        model = mmseg_custom.models.EncoderDecoderColonFormer(
-            backbone=hiera.hiera_base_224(
-                pretrained=True, checkpoint="mae_in1k_ft_in1k"
-            ),
-            decode_head=dict(
-                type="UPerHead",
-                in_channels=[96, 192, 384, 768],
-                in_index=[0, 1, 2, 3],
-                channels=128,
-                dropout_ratio=0.1,
-                num_classes=2,
-                out_channels=1,
-                norm_cfg=dict(type='BN', requires_grad=True),
-                align_corners=False,
-                loss_decode=dict(
-                    type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0
-                )
-            ),
+        backbone = hiera.hiera_base_224()
+        backbone.load_state_dict(torch.load('/workspace/hiera/examples/runs/state_dict.pth'))
+        # backbone = hiera.hiera_base_224(pretrained=True, checkpoint="mae_in1k_ft_in1k")
+        model = mmseg_custom.models.EncoderDecoderRaBiT(
+            backbone=backbone,
+            # decode_head=dict(
+            #     type="UPerHead",
+            #     in_channels=[96, 192, 384, 768],
+            #     in_index=[0, 1, 2, 3],
+            #     channels=128,
+            #     dropout_ratio=0.1,
+            #     num_classes=2,
+            #     out_channels=1,
+            #     norm_cfg=dict(type='BN', requires_grad=True),
+            #     align_corners=False,
+            #     loss_decode=dict(
+            #         type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0
+            #     )
+            # ),
             build_with_mmseg=args.build_with_mmseg,
             in_channels=(192, 384, 768),
         ).cuda()

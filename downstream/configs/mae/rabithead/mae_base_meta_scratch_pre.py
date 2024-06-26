@@ -1,4 +1,4 @@
-pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/mae_meta_unnorm_pix_img224_p16/weight/last.pth"
+pretrained = "/workspace/mae_meta_norm_pix_img224_p16/weight/last.pth"
 model = dict(
     type='EncoderDecoderRaBiT',
     pretrained=pretrained,

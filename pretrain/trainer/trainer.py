@@ -150,7 +150,7 @@ class Trainer:
       
       data = data.to(self.device)
     
-      with torch.cuda.amp.autocast():
+      with torch.cuda.amp.autocast(enabled=True, dtype=torch.bfloat16):
         loss, _, _ = self.model(data)
 
       loss_value = loss.item()
@@ -212,6 +212,7 @@ class Trainer:
 
   def train(self, resume_checkpoint=None):
     self.model.train()
+    self.current_epoch = 0
     if resume_checkpoint:
       self.current_epoch = self.load_checkpoint(resume_checkpoint)
     
@@ -219,7 +220,6 @@ class Trainer:
     start_time = time.time()
 
     # Start training
-    self.current_epoch = 0
     for epoch in range(self.current_epoch, self.epochs):
       self.current_epoch = epoch
       self.train_one_epoch()

@@ -168,7 +168,7 @@ class EncoderDecoderCustom(nn.Module):
 class EncoderDecoderRaBiT(nn.Module):
     def __init__(self,
                  backbone,
-                 decode_head,
+                 decode_head=None,
                  neck=None,
                  auxiliary_head=None,
                  train_cfg=None,
@@ -177,12 +177,17 @@ class EncoderDecoderRaBiT(nn.Module):
                  compound_coef=4,
                  numrepeat = 4,
                  bottleneck=True,
+                 build_with_mmseg=True,
                  in_channels=[768, 768, 768]
                  ):
         super(EncoderDecoderRaBiT, self).__init__()
-
-        self.backbone = MODELS.build(backbone)
-        self.backbone.init_weights(pretrained=pretrained)
+        self.build_with_mmseg = build_with_mmseg
+        
+        if self.build_with_mmseg:
+            self.backbone = MODELS.build(backbone)
+            self.backbone.init_weights(pretrained=pretrained)
+        else:
+            self.backbone = backbone
         
         if neck is not None:
             self.neck = MODELS.build(neck)
@@ -221,15 +226,24 @@ class EncoderDecoderRaBiT(nn.Module):
         self.head3 = Conv(self.fpn_num_filters[compound_coef],1,1,1,padding=0,bn_acti=False)
     
     def forward(self, inputs):
-        x = self.backbone(inputs)
+        if self.build_with_mmseg:
+            x = self.backbone(inputs)
+        else:
+            x = self.backbone(inputs, return_intermediates=True)[1]
         
         if hasattr(self, 'neck'):
             x = self.neck(x)
         
-        x1 = x[0] # 1/4
-        x2 = x[1] # 1/8
-        x3 = x[2] # 1/16
-        x4 = x[3] # 1/32
+        if self.build_with_mmseg:
+            x1 = x[0] # 1/4
+            x2 = x[1] # 1/8
+            x3 = x[2] # 1/16
+            x4 = x[3] # 1/32
+        else:
+            x1 = x[0].permute(0, 3, 1, 2).contiguous() # 1/4
+            x2 = x[1].permute(0, 3, 1, 2).contiguous() # 1/8
+            x3 = x[2].permute(0, 3, 1, 2).contiguous() # 1/16
+            x4 = x[3].permute(0, 3, 1, 2).contiguous() # 1/32
 
         x2 = self.conv1(x2)
         x3 = self.conv2(x3)

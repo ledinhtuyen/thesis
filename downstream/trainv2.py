@@ -162,7 +162,8 @@ def bce_dice_loss(pred, mask):
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train')
-    parser.add_argument('config', help='train config file path')
+    parser.add_argument('--config', type=str,
+                        default='', help='config file path')
     parser.add_argument('--warmup_epochs', type=int,
                         default=2, help='epoch number')
     parser.add_argument('--num_epochs', type=int,
@@ -177,6 +178,8 @@ def parse_args():
                         default=64, help='test batch size')
     parser.add_argument('--init_trainsize', type=int,
                         default=384, help='training dataset size')
+    parser.add_argument('--build_with_mmseg', action='store_true',
+                        default=False, help='whether the model is built with mmseg')
     parser.add_argument('--clip', type=float,
                         default=1.0, help='gradient clipping margin')
     parser.add_argument('--train_path', type=str,
@@ -247,7 +250,7 @@ def train(train_loader,
                 images = F.interpolate(images, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
                 gts = F.interpolate(gts, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
                 # ---- forward ----
-                with torch.cuda.amp.autocast(enabled=args.amp):
+                with torch.cuda.amp.autocast(enabled=args.amp, dtype=torch.bfloat16):
                     map4, map3, map2, map1 = model(images)
                     map1 = F.interpolate(map1, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
                     map2 = F.interpolate(map2, size=(trainsize, trainsize), mode='bilinear', align_corners=True)
@@ -272,11 +275,11 @@ def train(train_loader,
                         clip_gradient(optimizer, args.clip)
                         optimizer.step()
                         optimizer.zero_grad()
-                # ---- recording loss ----
+                    # ---- recording loss ----
                 if rate == 1:
-                    loss_record.update(loss.data, args.batchsize)
-                    dice.update(dice_score.data, args.batchsize)
-                    iou.update(iou_score.data, args.batchsize)
+                    loss_record.update(loss.item(), args.batchsize)
+                    dice.update(dice_score.item(), args.batchsize)
+                    iou.update(iou_score.item(), args.batchsize)
 
             # ---- train visualization ----
             if i == total_step:
@@ -292,15 +295,15 @@ def train(train_loader,
                 writer.add_scalar('train/train_mIoU', iou.show(), epoch)
                 writer.add_scalar('train/time', (datetime.now()-start_time).total_seconds(), epoch)
 
-    ckpt_path = save_path + f'/snapshots/{epoch}.pth'
-    print('[Saving Checkpoint:]', ckpt_path)
-    checkpoint = {
-        'epoch': epoch + 1,
-        'state_dict': model.state_dict(),
-        'optimizer': optimizer.state_dict(),
-        'scheduler': lr_scheduler.state_dict()
-    }
-    torch.save(checkpoint, ckpt_path)
+    # ckpt_path = save_path + f'/snapshots/{epoch}.pth'
+    # print('[Saving Checkpoint:]', ckpt_path)
+    # checkpoint = {
+    #     'epoch': epoch + 1,
+    #     'state_dict': model.state_dict(),
+    #     'optimizer': optimizer.state_dict(),
+    #     'scheduler': lr_scheduler.state_dict()
+    # }
+    # torch.save(checkpoint, ckpt_path)
     
 def test(test_dataloader_dict, model, epoch, writer, args):
     print_log(f"Testing on epoch {epoch}", logger=logging.getLogger())
@@ -380,12 +383,13 @@ def main():
         A.RandomBrightnessContrast(),
         A.GridDistortion(),
         A.MotionBlur(),
+        A.GaussianBlur(),
         A.OneOf([
             A.RandomCrop(224, 224, p=1),
             A.CenterCrop(224, 224, p=1)
         ], p=0.2),
         A.Resize(IMG_SIZE[0], IMG_SIZE[1]),
-    ], p=0.5)
+    ], p=1.0)
 
     # Build the dataloader
     train_img_paths = []
@@ -404,9 +408,17 @@ def main():
         drop_last=True
     )
     
+    test_path = dict(
+        Kvasir="/workspace/DATA2/public_dataset/TestDataset/Kvasir",
+        CVC_ClinicDB="/workspace/DATA2/public_dataset/TestDataset/CVC-ClinicDB",
+        CVC_ColonDB="/workspace/DATA2/public_dataset/TestDataset/CVC-ColonDB",
+        CVC_T="/workspace/DATA2/public_dataset/TestDataset/CVC-300",
+        ETIS_Larib="/workspace/DATA2/public_dataset/TestDataset/ETIS-LaribPolypDB",
+    )
+    
     # Build validation dataloader
     test_dataloader_dict = {}
-    for k, v in cfg.test_path.items():
+    for k, v in test_path.items():
         test_img_paths = glob('{}/images/*'.format(v))
         test_mask_paths = glob('{}/masks/*'.format(v))
         test_img_paths.sort()
@@ -422,7 +434,32 @@ def main():
         test_dataloader_dict[k] = test_loader
 
     # Build the model
-    model = MODELS.build(cfg.model).cuda()
+    if args.build_with_mmseg:
+        model = MODELS.build(cfg.model).cuda()
+    else:
+        import hiera
+        backbone = hiera.hiera_base_224()
+        backbone.load_state_dict(torch.load('/workspace/hiera/examples/runs/state_dict.pth'))
+        # backbone = hiera.hiera_base_224(pretrained=True, checkpoint="mae_in1k_ft_in1k")
+        model = mmseg_custom.models.EncoderDecoderRaBiT(
+            backbone=backbone,
+            # decode_head=dict(
+            #     type="UPerHead",
+            #     in_channels=[96, 192, 384, 768],
+            #     in_index=[0, 1, 2, 3],
+            #     channels=128,
+            #     dropout_ratio=0.1,
+            #     num_classes=2,
+            #     out_channels=1,
+            #     norm_cfg=dict(type='BN', requires_grad=True),
+            #     align_corners=False,
+            #     loss_decode=dict(
+            #         type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0
+            #     )
+            # ),
+            build_with_mmseg=False,
+            in_channels=(192, 384, 768),
+        ).cuda()
     
     params = model.parameters()
     optimizer = torch.optim.Adam(params, args.init_lr)
