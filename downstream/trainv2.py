@@ -16,7 +16,7 @@ from glob import glob
 
 import albumentations as A
 
-from utils import clip_gradient, AvgMeter
+from utils import clip_gradient, AvgMeter, structure_loss, dice_m, iou_m, get_macro_scores
 from datetime import datetime
 
 import mmseg_custom
@@ -26,17 +26,15 @@ from mmengine.logging import print_log
 from mmseg.registry import MODELS
 init_default_scope('mmseg')
 
-IMG_SIZE = (384, 384)
-
 class Dataset(torch.utils.data.Dataset):
     
-    def __init__(self, img_paths, mask_paths, aug=True, transform=None):
+    def __init__(self, img_paths, mask_paths, img_size = 384, transform=None):
         self.img_paths = img_paths
         self.mask_paths = mask_paths
-        self.aug = aug
+        self.img_size = img_size
         self.transform = transform
         self.t = A.Compose([
-            A.Resize(IMG_SIZE[0], IMG_SIZE[1]),
+            A.Resize(img_size, img_size),
         ])
 
     def __len__(self):
@@ -54,7 +52,7 @@ class Dataset(torch.utils.data.Dataset):
             image = augmented['image']
             mask = augmented['mask']
         
-        if image.shape != (IMG_SIZE[0], IMG_SIZE[1], 3) or mask.shape != (IMG_SIZE[0], IMG_SIZE[1]):
+        if image.shape != (self.img_size, self.img_size, 3):
             augmented = self.t(image=image, mask=mask)
             image = augmented['image']
             mask = augmented['mask']
@@ -67,105 +65,13 @@ class Dataset(torch.utils.data.Dataset):
         mask = mask.transpose((2, 0, 1))
 
         return np.asarray(image), np.asarray(mask)
-    
-epsilon = 1e-7
-
-def recall_m(y_true, y_pred):
-    true_positives = torch.sum(torch.round(torch.clip(y_true * y_pred, 0, 1)))
-    possible_positives = torch.sum(torch.round(torch.clip(y_true, 0, 1)))
-    recall = true_positives / (possible_positives + epsilon)
-    return recall
-
-def precision_m(y_true, y_pred):
-    true_positives = torch.sum(torch.round(torch.clip(y_true * y_pred, 0, 1)))
-    predicted_positives = torch.sum(torch.round(torch.clip(y_pred, 0, 1)))
-    precision = true_positives / (predicted_positives + epsilon)
-    return precision
-
-def dice_m(y_true, y_pred):
-    precision = precision_m(y_true, y_pred)
-    recall = recall_m(y_true, y_pred)
-    return 2*((precision*recall)/(precision+recall+epsilon))
-
-def iou_m(y_true, y_pred):
-    precision = precision_m(y_true, y_pred)
-    recall = recall_m(y_true, y_pred)
-    return recall*precision/(recall+precision-recall*precision + epsilon)
-
-def get_scores(gts, prs):
-    mean_precision = 0
-    mean_recall = 0
-    mean_iou = 0
-    mean_dice = 0
-    for gt, pr in zip(gts, prs):
-        mean_precision += precision_m(gt, pr)
-        mean_recall += recall_m(gt, pr)
-        mean_iou += iou_m(gt, pr)
-        mean_dice += dice_m(gt, pr)
-
-    mean_precision /= len(gts)
-    mean_recall /= len(gts)
-    mean_iou /= len(gts)
-    mean_dice /= len(gts)        
-    
-    print("scores: dice={}, miou={}, precision={}, recall={}".format(mean_dice, mean_iou, mean_precision, mean_recall))
-
-    return (mean_iou, mean_dice, mean_precision, mean_recall)
-
-class FocalLossV1(nn.Module):
-    
-    def __init__(self,
-                alpha=0.25,
-                gamma=2,
-                reduction='mean',):
-        super(FocalLossV1, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-        self.crit = nn.BCEWithLogitsLoss(reduction='none')
-
-    def forward(self, logits, label):
-        # compute loss
-        logits = logits.float() # use fp32 if logits is fp16
-        with torch.no_grad():
-            alpha = torch.empty_like(logits).fill_(1 - self.alpha)
-            alpha[label == 1] = self.alpha
-
-        probs = torch.sigmoid(logits)
-        pt = torch.where(label == 1, probs, 1 - probs)
-        ce_loss = self.crit(logits, label.float())
-        loss = (alpha * torch.pow(1 - pt, self.gamma) * ce_loss)
-        if self.reduction == 'mean':
-            loss = loss.mean()
-        if self.reduction == 'sum':
-            loss = loss.sum()
-        return loss
-
-def structure_loss(pred, mask):
-    weit = 1 + 5*torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    wfocal = FocalLossV1()(pred, mask)
-    wfocal = (wfocal*weit).sum(dim=(2,3)) / weit.sum(dim=(2, 3))
-
-    pred = torch.sigmoid(pred)
-    inter = ((pred * mask)*weit).sum(dim=(2, 3))
-    union = ((pred + mask)*weit).sum(dim=(2, 3))
-    wiou = 1 - (inter + 1)/(union - inter+1)
-    return (wfocal + wiou).mean()
-
-def bce_dice_loss(pred, mask):
-    bce = F.binary_cross_entropy_with_logits(pred, mask)
-    pred = torch.sigmoid(pred)
-    inter = torch.sum(pred * mask)
-    union = torch.sum(pred) + torch.sum(mask)
-    dice = 1 - 2 * inter / union
-    return bce + dice
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train')
     parser.add_argument('--config', type=str,
                         default='', help='config file path')
     parser.add_argument('--warmup_epochs', type=int,
-                        default=2, help='epoch number')
+                        default=1, help='epoch number')
     parser.add_argument('--num_epochs', type=int,
                         default=20, help='epoch number')
     parser.add_argument('--init_lr', type=float,
@@ -178,8 +84,10 @@ def parse_args():
                         default=64, help='test batch size')
     parser.add_argument('--init_trainsize', type=int,
                         default=384, help='training dataset size')
-    parser.add_argument('--build_with_mmseg', action='store_true',
-                        default=False, help='whether the model is built with mmseg')
+    parser.add_argument('--num_workers', type=int,
+                        default=16, help='test batch size')
+    parser.add_argument('--seed', type=int,
+                        default=2024, help='random seed')
     parser.add_argument('--clip', type=float,
                         default=1.0, help='gradient clipping margin')
     parser.add_argument('--train_path', type=str,
@@ -220,7 +128,6 @@ def train(train_loader,
     print_log(f"Training on epoch {epoch}", logger=logging.getLogger())
     model.train()
     # ---- multi-scale training ----
-    # size_rates = [0.75, 1, 1.25]
     size_rates = [0.7, 1, 1.37]
     loss_record = AvgMeter()
     dice, iou = AvgMeter(), AvgMeter()
@@ -240,7 +147,6 @@ def train(train_loader,
             writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], (epoch-1) * total_step + i)
 
             for rate in size_rates: 
-                # optimizer.zero_grad()
                 # ---- data prepare ----
                 images, gts = pack
                 images = images.cuda()
@@ -295,15 +201,15 @@ def train(train_loader,
                 writer.add_scalar('train/train_mIoU', iou.show(), epoch)
                 writer.add_scalar('train/time', (datetime.now()-start_time).total_seconds(), epoch)
 
-    # ckpt_path = save_path + f'/snapshots/{epoch}.pth'
-    # print('[Saving Checkpoint:]', ckpt_path)
-    # checkpoint = {
-    #     'epoch': epoch + 1,
-    #     'state_dict': model.state_dict(),
-    #     'optimizer': optimizer.state_dict(),
-    #     'scheduler': lr_scheduler.state_dict()
-    # }
-    # torch.save(checkpoint, ckpt_path)
+    ckpt_path = save_path + f'/snapshots/{epoch}.pth'
+    print('[Saving Checkpoint:]', ckpt_path)
+    checkpoint = {
+        'epoch': epoch + 1,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'scheduler': lr_scheduler.state_dict()
+    }
+    torch.save(checkpoint, ckpt_path)
     
 def test(test_dataloader_dict, model, epoch, writer, args):
     print_log(f"Testing on epoch {epoch}", logger=logging.getLogger())
@@ -321,7 +227,6 @@ def test(test_dataloader_dict, model, epoch, writer, args):
                 res, _, _, _ = model(images)
                 res = F.interpolate(res, size=(test_size, test_size), mode='bilinear', align_corners=False)
                 res = res.sigmoid().data.cpu().squeeze()
-                # res = (res - res.min()) / (res.max() - res.min() + 1e-8)
                 pr = res.round()
                 gts = gts.data.cpu().squeeze()
 
@@ -329,7 +234,7 @@ def test(test_dataloader_dict, model, epoch, writer, args):
                     gt_.append(gt)
                     pr_.append(pr)
             
-            iou_score, dice_score, precision, recall = get_scores(gt_, pr_)
+            iou_score, dice_score, precision, recall = get_macro_scores(gt_, pr_)
             print('{} Testing Epoch [{:03d}/{:03d}], '
                     '[name_dataset: {}, dice: {:0.4f}, iou: {:0.4f}]'.
                     format(datetime.now(), epoch, args.num_epochs,\
@@ -342,6 +247,13 @@ def test(test_dataloader_dict, model, epoch, writer, args):
 
 def main():
     args = parse_args()
+    
+    # Set seed
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.backends.cudnn.deterministic = True
     
     # load config
     cfg = Config.fromfile(args.config)
@@ -378,18 +290,15 @@ def main():
     train_transform = A.Compose([
         A.RandomRotate90(),
         A.Flip(),
-        # A.D4(),
         A.HueSaturationValue(),
         A.RandomBrightnessContrast(),
-        A.GridDistortion(),
-        A.MotionBlur(),
         A.GaussianBlur(),
         A.OneOf([
             A.RandomCrop(224, 224, p=1),
             A.CenterCrop(224, 224, p=1)
         ], p=0.2),
-        A.Resize(IMG_SIZE[0], IMG_SIZE[1]),
-    ], p=1.0)
+        A.Resize(args.init_trainsize, args.init_trainsize),
+    ], p=0.5)
 
     # Build the dataloader
     train_img_paths = []
@@ -408,12 +317,14 @@ def main():
         drop_last=True
     )
     
+    benchmark_dir = '/'.join(args.train_path.split('/')[0:-1])
+    
     test_path = dict(
-        Kvasir="/workspace/DATA2/public_dataset/TestDataset/Kvasir",
-        CVC_ClinicDB="/workspace/DATA2/public_dataset/TestDataset/CVC-ClinicDB",
-        CVC_ColonDB="/workspace/DATA2/public_dataset/TestDataset/CVC-ColonDB",
-        CVC_T="/workspace/DATA2/public_dataset/TestDataset/CVC-300",
-        ETIS_Larib="/workspace/DATA2/public_dataset/TestDataset/ETIS-LaribPolypDB",
+        Kvasir=f"{benchmark_dir}/TestDataset/Kvasir",
+        CVC_ClinicDB=f"{benchmark_dir}/TestDataset/CVC-ClinicDB",
+        CVC_ColonDB=f"{benchmark_dir}/TestDataset/CVC-ColonDB",
+        CVC_T=f"{benchmark_dir}/TestDataset/CVC-300",
+        ETIS_Larib=f"{benchmark_dir}/TestDataset/ETIS-LaribPolypDB",
     )
     
     # Build validation dataloader
@@ -434,32 +345,7 @@ def main():
         test_dataloader_dict[k] = test_loader
 
     # Build the model
-    if args.build_with_mmseg:
-        model = MODELS.build(cfg.model).cuda()
-    else:
-        import hiera
-        backbone = hiera.hiera_base_224()
-        backbone.load_state_dict(torch.load('/workspace/hiera/examples/runs/state_dict.pth'))
-        # backbone = hiera.hiera_base_224(pretrained=True, checkpoint="mae_in1k_ft_in1k")
-        model = mmseg_custom.models.EncoderDecoderRaBiT(
-            backbone=backbone,
-            # decode_head=dict(
-            #     type="UPerHead",
-            #     in_channels=[96, 192, 384, 768],
-            #     in_index=[0, 1, 2, 3],
-            #     channels=128,
-            #     dropout_ratio=0.1,
-            #     num_classes=2,
-            #     out_channels=1,
-            #     norm_cfg=dict(type='BN', requires_grad=True),
-            #     align_corners=False,
-            #     loss_decode=dict(
-            #         type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0
-            #     )
-            # ),
-            build_with_mmseg=False,
-            in_channels=(192, 384, 768),
-        ).cuda()
+    model = MODELS.build(cfg.model).cuda()
     
     params = model.parameters()
     optimizer = torch.optim.Adam(params, args.init_lr)
@@ -478,14 +364,7 @@ def main():
 
     print_log('Start running, epoch: %d' % start_epoch, logger=logging.getLogger())
     for epoch in range(start_epoch, args.num_epochs+1):
-        train(train_loader, 
-              model, 
-              optimizer, 
-              epoch, 
-              lr_scheduler, 
-              save_path, 
-              writer, 
-              args)
+        train(train_loader, model, optimizer, epoch, lr_scheduler, save_path, writer, args)
         test(test_dataloader_dict, model, epoch, writer, args)
 
 if __name__ == '__main__':

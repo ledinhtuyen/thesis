@@ -17,8 +17,7 @@ from tqdm import tqdm
 from glob import glob
 import albumentations as A
 
-import hiera.hiera
-from utils import clip_gradient, AvgMeter
+from utils import clip_gradient, AvgMeter, structure_loss, get_macro_scores, get_micro_scores
 from datetime import datetime
 import json
 
@@ -28,8 +27,6 @@ from mmengine.config import Config, DictAction
 from mmengine.logging import print_log
 from mmseg.registry import MODELS
 init_default_scope('mmseg')
-
-import hiera
 
 class Dataset(torch.utils.data.Dataset):
     
@@ -70,145 +67,12 @@ class Dataset(torch.utils.data.Dataset):
 
         return np.asarray(image), np.asarray(mask)
 
-epsilon = 1e-7
-
-def recall_m(y_true, y_pred):
-    true_positives = torch.sum(torch.round(torch.clip(y_true * y_pred, 0, 1)))
-    possible_positives = torch.sum(torch.round(torch.clip(y_true, 0, 1)))
-    recall = true_positives / (possible_positives + epsilon)
-    return recall
-
-def precision_m(y_true, y_pred):
-    true_positives = torch.sum(torch.round(torch.clip(y_true * y_pred, 0, 1)))
-    predicted_positives = torch.sum(torch.round(torch.clip(y_pred, 0, 1)))
-    precision = true_positives / (predicted_positives + epsilon)
-    return precision
-
-def dice_m(y_true, y_pred):
-    precision = precision_m(y_true, y_pred)
-    recall = recall_m(y_true, y_pred)
-    return 2*((precision*recall)/(precision+recall+epsilon))
-
-def iou_m(y_true, y_pred):
-    precision = precision_m(y_true, y_pred)
-    recall = recall_m(y_true, y_pred)
-    return recall*precision/(recall+precision-recall*precision + epsilon)
-
-def get_macro_scores(gts, prs): # Macro
-    mean_precision = 0
-    mean_recall = 0
-    mean_iou = 0
-    mean_dice = 0
-    for gt, pr in zip(gts, prs):
-        mean_precision += precision_m(gt, pr)
-        mean_recall += recall_m(gt, pr)
-        mean_iou += iou_m(gt, pr)
-        mean_dice += dice_m(gt, pr)
-
-    mean_precision /= len(gts)
-    mean_recall /= len(gts)
-    mean_iou /= len(gts)
-    mean_dice /= len(gts)        
-    
-    print("Macro scores: dice={}, miou={}, precision={}, recall={}".format(mean_dice, mean_iou, mean_precision, mean_recall))
-
-    return (mean_iou, mean_dice, mean_precision, mean_recall)
-
-def get_micro_scores(gts, prs): # Micro
-  mean_precision = 0
-  mean_recall = 0
-  mean_iou = 0
-  mean_dice = 0
-  
-  total_area_intersect = 0
-  total_area_union = 0
-  total_pr = 0
-  total_gt = 0
- 
-  for gt, pr in zip(gts, prs):
-    total_area_intersect += torch.sum(torch.round(torch.clip(gt * pr, 0, 1)))
-    total_area_union += torch.sum(torch.round(torch.clip(gt + pr, 0, 1)))
-    total_pr += torch.sum(torch.round(torch.clip(pr, 0, 1)))
-    total_gt += torch.sum(torch.round(torch.clip(gt, 0, 1)))
-    
-  mean_precision = total_area_intersect / (total_pr + epsilon)
-  mean_recall = total_area_intersect / (total_gt + epsilon)
-  mean_iou = total_area_intersect / (total_area_union + epsilon)
-  mean_dice = 2 * total_area_intersect / (total_pr + total_gt + epsilon)
-  
-  print("Micro scores: dice={}, miou={}, precision={}, recall={}".format(mean_dice, mean_iou, mean_precision, mean_recall))
-  
-  return (mean_iou, mean_dice, mean_precision, mean_recall)
-
-class FocalLossV1(nn.Module):
-    
-    def __init__(self,
-                alpha=0.25,
-                gamma=2,
-                reduction='mean',):
-        super(FocalLossV1, self).__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.reduction = reduction
-        self.crit = nn.BCEWithLogitsLoss(reduction='none')
-
-    def forward(self, logits, label):
-        # compute loss
-        logits = logits.float() # use fp32 if logits is fp16
-        with torch.no_grad():
-            alpha = torch.empty_like(logits).fill_(1 - self.alpha)
-            alpha[label == 1] = self.alpha
-
-        probs = torch.sigmoid(logits)
-        pt = torch.where(label == 1, probs, 1 - probs)
-        ce_loss = self.crit(logits, label.float())
-        loss = (alpha * torch.pow(1 - pt, self.gamma) * ce_loss)
-        if self.reduction == 'mean':
-            loss = loss.mean()
-        if self.reduction == 'sum':
-            loss = loss.sum()
-        return loss
-
-def structure_loss(pred, mask):
-    weit = 1 + 5*torch.abs(F.avg_pool2d(mask, kernel_size=31, stride=1, padding=15) - mask)
-    wfocal = FocalLossV1()(pred, mask)
-    wfocal = (wfocal*weit).sum(dim=(2,3)) / weit.sum(dim=(2, 3))
-
-    pred = torch.sigmoid(pred)
-    inter = ((pred * mask)*weit).sum(dim=(2, 3))
-    union = ((pred + mask)*weit).sum(dim=(2, 3))
-    wiou = 1 - (inter + 1)/(union - inter+1)
-    return (wfocal + wiou).mean()
-
-class DiceBCELoss(nn.Module):
-    def __init__(self):
-        super(DiceBCELoss, self).__init__()
-
-    def forward(self, inputs, targets, smooth=1):
-        # print(inputs.size(), targets.size())
-        #comment out if your model contains a sigmoid or equivalent activation layer
-        
-        #flatten label and prediction tensors
-        # inputs = inputs.view(-1)
-        # targets = targets.view(-1)
-        inputs = torch.flatten(inputs)
-        targets = torch.flatten(targets.float())
-        
-        inputs_ = torch.sigmoid(inputs)
-        
-        intersection = (inputs_ * targets).sum()      
-        dice_loss = 1 - (2.*intersection + smooth)/(inputs_.sum() + targets.sum() + smooth)  
-        BCE = F.binary_cross_entropy_with_logits(inputs, targets, reduction='mean')
-        Dice_BCE = torch.nansum(BCE) + torch.nansum(dice_loss)
-        
-        return Dice_BCE
-
 def parse_args():
     parser = argparse.ArgumentParser(description='Train')
     parser.add_argument('--config', type=str,
                         default='', help='config file')
     parser.add_argument('--warmup_epochs', type=int,
-                        default=2, help='epoch number')
+                        default=1, help='epoch number')
     parser.add_argument('--num_epochs', type=int,
                         default=20, help='epoch number')
     parser.add_argument('--init_lr', type=float,
@@ -227,10 +91,6 @@ def parse_args():
                         default=16, help='test batch size')
     parser.add_argument('--seed', type=int,
                         default=2024, help='random seed')
-    parser.add_argument('--freeze_backbone', action='store_true',
-                        default=False, help='freeze the backbone params')
-    parser.add_argument('--build_with_mmseg', action='store_true',
-                        default=False, help='build with mmseg')
     parser.add_argument('--type_damage', type=str,
                         default='daday', help='type of damage')
     parser.add_argument('--clip', type=float,
@@ -271,7 +131,6 @@ def train(train_loader,
     print_log(f"Training on epoch {epoch}", logger=logging.getLogger())
     model.train()
     # ---- multi-scale training ----
-    # size_rates = [0.75, 1, 1.25]
     size_rates = [0.7, 1, 1.37]
     loss_record = AvgMeter()
     total_step = len(train_loader)
@@ -290,7 +149,6 @@ def train(train_loader,
             writer.add_scalar('train/lr', optimizer.param_groups[0]["lr"], (epoch-1) * total_step + i)
 
             for rate in size_rates: 
-                # optimizer.zero_grad()
                 # ---- data prepare ----
                 images, gts = pack
                 images = images.cuda()
@@ -335,15 +193,15 @@ def train(train_loader,
         writer.add_scalar('train/train_loss', loss_record.show(), epoch)
         writer.add_scalar('train/time', (datetime.now()-start_time).total_seconds(), epoch)
 
-    # ckpt_path = save_path + f'/snapshots/{epoch}.pth'
-    # print('[Saving Checkpoint:]', ckpt_path)
-    # checkpoint = {
-    #     'epoch': epoch + 1,
-    #     'state_dict': model.state_dict(),
-    #     'optimizer': optimizer.state_dict(),
-    #     'scheduler': lr_scheduler.state_dict()
-    # }
-    # torch.save(checkpoint, ckpt_path)
+    ckpt_path = save_path + f'/snapshots/{epoch}.pth'
+    print('[Saving Checkpoint:]', ckpt_path)
+    checkpoint = {
+        'epoch': epoch + 1,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'scheduler': lr_scheduler.state_dict()
+    }
+    torch.save(checkpoint, ckpt_path)
     
 def test(test_dataloader, model, epoch, writer, args):
     print_log(f"Testing on epoch {epoch}", logger=logging.getLogger())
@@ -360,7 +218,6 @@ def test(test_dataloader, model, epoch, writer, args):
             res, _, _, _ = model(images)
             res = F.interpolate(res, size=(test_size, test_size), mode='bilinear', align_corners=False)
             res = res.sigmoid().data.cpu().squeeze()
-            # res = (res - res.min()) / (res.max() - res.min() + 1e-8)
             pr = res.round()
             gts = gts.data.cpu().squeeze()
 
@@ -396,29 +253,26 @@ def main():
         torch.backends.cudnn.deterministic = True
     
     # load config
-    if args.build_with_mmseg:
-        cfg = Config.fromfile(args.config)
-        if args.cfg_options is not None:
-            cfg.merge_from_dict(args.cfg_options)
-            
-        # work_dir is determined in this priority: CLI > segment in file > filename
-        if args.work_dir is not None:
-            # update configs according to CLI args if args.work_dir is not None
-            cfg.work_dir = args.work_dir
-        elif cfg.get('work_dir', None) is None:
-            # use config filename as default work_dir if cfg.work_dir is None
-            cfg.work_dir = osp.join('./work_dirs',
-                                    osp.splitext(osp.basename(args.config))[0])
+    cfg = Config.fromfile(args.config)
+    if args.cfg_options is not None:
+        cfg.merge_from_dict(args.cfg_options)
+        
+    # work_dir is determined in this priority: CLI > segment in file > filename
+    if args.work_dir is not None:
+        # update configs according to CLI args if args.work_dir is not None
+        cfg.work_dir = args.work_dir
+    elif cfg.get('work_dir', None) is None:
+        # use config filename as default work_dir if cfg.work_dir is None
+        cfg.work_dir = osp.join('./work_dirs',
+                                osp.splitext(osp.basename(args.config))[0])
 
-        # resume training
-        cfg.resume = args.resume
+    # resume training
+    cfg.resume = args.resume
     
     # Create a new work_dir
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    if args.build_with_mmseg:
-        save_path = osp.join(cfg.work_dir, timestamp)
-    else:
-        save_path = osp.join(args.work_dir, timestamp)
+    save_path = osp.join(cfg.work_dir, timestamp)
+
     if not os.path.exists(save_path):
         os.makedirs(save_path + '/snapshots', exist_ok=True)
         os.makedirs(save_path + '/logs', exist_ok=True)
@@ -427,16 +281,15 @@ def main():
         writer = SummaryWriter(save_path + '/logs')
         
         # Save config file to work_dir
-        if args.build_with_mmseg:
-            cfg.dump(save_path + '/config.py')
+        cfg.dump(save_path + '/config.py')
     else:
         print("Save path existed")
 
     if args.type_damage != "polyp":
-        data = json.load(open("/workspace/endoscopy/ft_ton_thuong.json"))
+        data = json.load(open("/home/s/tuyenld/endoscopy/ft_ton_thuong.json"))
         data_damage = data[args.type_damage]
     else:
-        data_damage = json.load(open("/workspace/endoscopy/polyp.json"))
+        data_damage = json.load(open("/home/s/tuyenld/endoscopy/polyp.json"))
 
     # Transform
     train_transform = A.Compose([
@@ -456,10 +309,14 @@ def main():
     train_img_paths = data_damage["train"]["images"]
     train_mask_paths = data_damage["train"]["masks"]
     
-    train_dataset = Dataset(train_img_paths, train_mask_paths, img_size=args.init_trainsize, prefix_path=args.prefix_path, transform=train_transform)
+    train_dataset = Dataset(train_img_paths, 
+                            train_mask_paths, 
+                            img_size=args.init_trainsize, 
+                            prefix_path=args.prefix_path, 
+                            transform=train_transform)
     
-    # Train with 10% of the dataset with no random choice and separate
-    # train_dataset = torch.utils.data.Subset(train_dataset, list(range(0, len(train_dataset), 10)))
+    # Train with 5% of the dataset with no random choice and separate
+    # train_dataset = torch.utils.data.Subset(train_dataset, list(range(0, len(train_dataset), 20)))
     
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
@@ -484,35 +341,7 @@ def main():
     )
 
     # Build the model
-    if args.build_with_mmseg:
-        model = MODELS.build(cfg.model).cuda()
-    else:
-        backbone = hiera.hiera_base_224()
-        backbone.load_state_dict(torch.load('/workspace/hiera/examples/runs/state_dict.pth'))
-        # backbone = hiera.hiera_base_224(pretrained=True, checkpoint="mae_in1k_ft_in1k")
-        model = mmseg_custom.models.EncoderDecoderRaBiT(
-            backbone=backbone,
-            # decode_head=dict(
-            #     type="UPerHead",
-            #     in_channels=[96, 192, 384, 768],
-            #     in_index=[0, 1, 2, 3],
-            #     channels=128,
-            #     dropout_ratio=0.1,
-            #     num_classes=2,
-            #     out_channels=1,
-            #     norm_cfg=dict(type='BN', requires_grad=True),
-            #     align_corners=False,
-            #     loss_decode=dict(
-            #         type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0
-            #     )
-            # ),
-            build_with_mmseg=args.build_with_mmseg,
-            in_channels=(192, 384, 768),
-        ).cuda()
-    
-    if args.freeze_backbone:
-        for param in model.backbone.parameters():
-            param.requires_grad = False
+    model = MODELS.build(cfg.model).cuda()
     
     params = model.parameters()
     optimizer = torch.optim.Adam(params, args.init_lr)
@@ -530,14 +359,7 @@ def main():
         
     print_log('Start running, epoch: %d' % start_epoch, logger=logging.getLogger())
     for epoch in range(start_epoch, args.num_epochs+1):
-        train(train_loader, 
-              model, 
-              optimizer, 
-              epoch, 
-              lr_scheduler, 
-              save_path, 
-              writer, 
-              args)
+        train(train_loader, model, optimizer, epoch, lr_scheduler, save_path, writer, args)
         test(val_loader, model, epoch, writer, args)
 
 if __name__ == '__main__':

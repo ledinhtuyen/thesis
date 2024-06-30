@@ -1,4 +1,4 @@
-pretrained = "/workspace/mae_ckpt/mae_pretrain_vit_base.pth"
+pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/vit-base-mae/mae_pretrain_vit_base.pth"
 model = dict(
     type='EncoderDecoderRaBiT',
     pretrained=pretrained,

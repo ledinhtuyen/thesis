@@ -5,7 +5,6 @@ import PIL
 
 import torch
 import numpy as np
-import cupy as cp
 import torchvision.transforms as transforms
 from torchvision.io import read_image
 from torch.utils.data import Dataset, DataLoader
@@ -16,7 +15,6 @@ def build_transforms(input_size=224, is_train=False, meanstd={'mean': IMAGENET_D
     if is_train:
         transform = transforms.Compose([
             transforms.RandomResizedCrop((input_size, input_size), scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
-            # transforms.Resize((input_size, input_size), interpolation=3),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize(mean=meanstd["mean"], std=meanstd["std"]),
@@ -40,7 +38,7 @@ def mean_and_std(train_data, prefix_path, meanstd_file):
             img_dir: the directory of the images
             meanstd_file: the file to save the mean and std
     """
-
+    import cupy as cp
     # BEGIN CODE
     if os.path.isfile(meanstd_file):
         meanstd = torch.load(meanstd_file)

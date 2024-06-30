@@ -8,3 +8,4 @@ scikit-learn
 tensorboard
 timm
 pytorch_revgrad
+cupy

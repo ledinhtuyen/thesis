@@ -11,6 +11,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchmetrics.classification import Accuracy, ConfusionMatrix
 
 import albumentations as A
+import numpy as np
 
 from utils import clip_gradient, MetricMeter, plot_confusion_matrix
 from datetime import datetime
@@ -18,8 +19,7 @@ from datetime import datetime
 import mmseg_custom
 import multitask
 from multitask.multidataset import Data, MultiDataset
-from multitask.structure_loss import structure_loss
-from utils import dice_m, iou_m, get_macro_scores, get_micro_scores
+from utils import dice_m, iou_m, get_macro_scores, get_micro_scores, structure_loss
 
 from mmengine.registry import init_default_scope
 from mmengine.config import Config, DictAction
@@ -133,7 +133,7 @@ class CalcMetric:
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Train')
-    parser.add_argument('config', help='train config file path')
+    parser.add_argument('--config', help='train config file path')
     parser.add_argument('--warmup_epochs', type=int,
                         default=2, help='epoch number')
     parser.add_argument('--num_epochs', type=int,
@@ -154,6 +154,8 @@ def parse_args():
                         default='metadata.json', help='metadata file')
     parser.add_argument('--prefix_path', type=str,
                         default='/mnt/tuyenld/data/endoscopy/', help='prefix path')
+    parser.add_argument('--seed', type=int,
+                        default=2024, help='random seed')
     parser.add_argument('--clip', type=float,
                         default=1.0, help='gradient clipping margin')
     parser.add_argument('--work-dir', help='the dir to save logs and models')
@@ -195,7 +197,7 @@ def train(train_loader,
     met.add_meter(['all_loss', 'seg_loss', 'hp_loss', 'pos_loss', 'type_loss'])
     total_step = len(train_loader)
     if args.amp:
-        scaler = torch.cuda.amp.GradScaler(init_scale=2**14, enabled=args.amp)
+        scaler = torch.cuda.amp.GradScaler()
     with torch.autograd.set_detect_anomaly(True):
         start_time = datetime.now()
         optimizer.zero_grad()
@@ -260,15 +262,15 @@ def train(train_loader,
         writer.add_scalar('train/type_loss', met.get_meter('type_loss').show(), epoch)
         writer.add_scalar('train/time', (datetime.now()-start_time).total_seconds(), epoch)
 
-    # ckpt_path = save_path + f'/snapshots/{epoch}.pth'
-    # print('[Saving Checkpoint:]', ckpt_path)
-    # checkpoint = {
-    #     'epoch': epoch + 1,
-    #     'state_dict': model.state_dict(),
-    #     'optimizer': optimizer.state_dict(),
-    #     'scheduler': lr_scheduler.state_dict()
-    # }
-    # torch.save(checkpoint, ckpt_path)
+    ckpt_path = save_path + f'/snapshots/{epoch}.pth'
+    print('[Saving Checkpoint:]', ckpt_path)
+    checkpoint = {
+        'epoch': epoch + 1,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+        'scheduler': lr_scheduler.state_dict()
+    }
+    torch.save(checkpoint, ckpt_path)
 
 def test(test_dataloader, model, epoch, save_path, writer, args):
     print_log(f"Testing on epoch {epoch}", logger=logging.getLogger())
@@ -295,26 +297,34 @@ def test(test_dataloader, model, epoch, save_path, writer, args):
 def main():
     args = parse_args()
     
+    # Set seed
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
+        torch.backends.cudnn.deterministic = True
+    
+    
     # load config
-    # cfg = Config.fromfile(args.config)
-    # if args.cfg_options is not None:
-    #     cfg.merge_from_dict(args.cfg_options)
+    cfg = Config.fromfile(args.config)
+    if args.cfg_options is not None:
+        cfg.merge_from_dict(args.cfg_options)
         
-    # # work_dir is determined in this priority: CLI > segment in file > filename
-    # if args.work_dir is not None:
-    #     # update configs according to CLI args if args.work_dir is not None
-    #     cfg.work_dir = args.work_dir
-    # elif cfg.get('work_dir', None) is None:
-    #     # use config filename as default work_dir if cfg.work_dir is None
-    #     cfg.work_dir = osp.join('./work_dirs',
-    #                             osp.splitext(osp.basename(args.config))[0])
+    # work_dir is determined in this priority: CLI > segment in file > filename
+    if args.work_dir is not None:
+        # update configs according to CLI args if args.work_dir is not None
+        cfg.work_dir = args.work_dir
+    elif cfg.get('work_dir', None) is None:
+        # use config filename as default work_dir if cfg.work_dir is None
+        cfg.work_dir = osp.join('./work_dirs',
+                                osp.splitext(osp.basename(args.config))[0])
 
-    # # resume training
-    # cfg.resume = args.resume
+    # resume training
+    cfg.resume = args.resume
     
     # Create a new work_dir
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-    save_path = osp.join(args.work_dir, timestamp)
+    save_path = osp.join(cfg.work_dir, timestamp)
     if not os.path.exists(save_path):
         os.makedirs(save_path + '/snapshots', exist_ok=True)
         os.makedirs(save_path + '/logs', exist_ok=True)
@@ -324,30 +334,29 @@ def main():
         writer = SummaryWriter(save_path + '/logs')
         
         # Save config file to work_dir
-        # cfg.dump(save_path + '/config.py')
+        cfg.dump(save_path + '/config.py')
     else:
         print("Save path existed")
         
     # Train data augmentation
-    # train_transform = A.Compose([
-    #     A.RandomRotate90(),
-    #     A.Flip(),
-    #     # A.D4(),
-    #     A.HueSaturationValue(),
-    #     A.RandomBrightnessContrast(),
-    #     A.GaussianBlur(),
-    #     A.OneOf([
-    #         A.RandomCrop(224, 224, p=1),
-    #         A.CenterCrop(224, 224, p=1)
-    #     ], p=0.2),
-    #     A.Resize(args.init_trainsize, args.init_trainsize)
-    # ], p=1.0)
+    train_transform = A.Compose([
+        A.RandomRotate90(),
+        A.Flip(),
+        A.HueSaturationValue(),
+        A.RandomBrightnessContrast(),
+        A.GaussianBlur(),
+        A.OneOf([
+            A.RandomCrop(224, 224, p=1),
+            A.CenterCrop(224, 224, p=1)
+        ], p=0.2),
+        A.Resize(args.init_trainsize, args.init_trainsize)
+    ], p=0.5)
 
     # Build the data
     data = Data(args.metadata_file)
     
     train_dataset = MultiDataset(data.train_samples, args.prefix_path, 
-                                 img_size=args.init_trainsize)
+                                 img_size=args.init_trainsize, transform=train_transform)
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batchsize,
@@ -358,7 +367,8 @@ def main():
     )
     
     # Build validation dataloader
-    val_dataset = MultiDataset(data.val_samples, args.prefix_path, img_size=args.init_trainsize)
+    val_dataset = MultiDataset(data.val_samples, args.prefix_path, 
+                               img_size=args.init_trainsize)
     val_loader = torch.utils.data.DataLoader(
         val_dataset,
         batch_size=args.test_batchsize,
@@ -369,29 +379,7 @@ def main():
     )
 
     # Build the model
-    # model = MODELS.build(cfg.model).cuda()
-    import hiera
-    backbone = hiera.hiera_base_224()
-    backbone.load_state_dict(torch.load('/workspace/hiera/examples/runs/state_dict.pth'))
-    model = multitask.model.MultiTask(
-        backbone=backbone,
-        decode_head=dict(
-            type="UPerHead",
-            in_channels=[96, 192, 384, 768],
-            in_index=[0, 1, 2, 3],
-            channels=128,
-            dropout_ratio=0.1,
-            num_classes=2,
-            out_channels=1,
-            norm_cfg=dict(type='BN', requires_grad=True),
-            align_corners=False,
-            loss_decode=dict(
-                type='CrossEntropyLoss', use_sigmoid=True, loss_weight=1.0
-            )
-        ),
-        build_with_mmseg=False,
-        in_channels=(192, 384, 768),
-    ).cuda()
+    model = MODELS.build(cfg.model).cuda()
     
     
     params = model.parameters()
@@ -410,14 +398,7 @@ def main():
         
     print_log('Start running, epoch: %d' % start_epoch, logger=logging.getLogger())
     for epoch in range(start_epoch, args.num_epochs+1):
-        train(train_loader, 
-              model, 
-              optimizer, 
-              epoch, 
-              lr_scheduler, 
-              save_path, 
-              writer, 
-              args)
+        train(train_loader, model, optimizer, epoch, lr_scheduler, save_path, writer, args)
         test(val_loader, model, epoch, save_path, writer, args)
 
 if __name__ == '__main__':

@@ -13,7 +13,7 @@ from mmseg.registry import MODELS
 class MultiTask(nn.Module):
     def __init__(self,
                  backbone,
-                 decode_head,
+                 decode_head=None,
                  neck=None,
                  auxiliary_head=None,
                  train_cfg=None,
@@ -21,18 +21,13 @@ class MultiTask(nn.Module):
                  pretrained=None,
                  compound_coef=4,
                  numrepeat = 4,
-                 in_channels=(192, 384, 768),
-                 build_with_mmseg=True
+                 in_channels=(192, 384, 768)
                  ):
         super(MultiTask, self).__init__()
         self.in_channels = in_channels
-        self.build_with_mmseg = build_with_mmseg
         
-        if self.build_with_mmseg:
-            self.backbone = MODELS.build(backbone)
-            self.backbone.init_weights(pretrained=pretrained)
-        else:
-            self.backbone = backbone
+        self.backbone = MODELS.build(backbone)
+        self.backbone.init_weights(pretrained=pretrained)
         
         if neck is not None:
             self.neck = MODELS.build(neck)
@@ -59,36 +54,10 @@ class MultiTask(nn.Module):
             8: [80, 224, 640],
         }
         
-        self.head_seg = self.build_head_segment_colonformer()
+        self.head_seg = self.build_head_segment_rabit()
         self.head_cls_hp = self.build_head_cls(1)
         self.head_cls_positon = self.build_head_cls(10)
         self.head_type = self.build_head_cls(7)
-        
-    def build_head_segment_colonformer(self):
-        head_segment = nn.ModuleDict()
-        
-        head_segment["CFP_1"] = CFPModule(self.in_channels[0], d = 8)
-        head_segment["CFP_2"] = CFPModule(self.in_channels[1], d = 8)
-        head_segment["CFP_3"] = CFPModule(self.in_channels[2], d = 8)
-        ###### dilation rate 4, 62.8
-
-        head_segment["ra1_conv1"] = Conv(self.in_channels[0],32,3,1,padding=1,bn_acti=True)
-        head_segment["ra1_conv2"] = Conv(32,32,3,1,padding=1,bn_acti=True)
-        head_segment["ra1_conv3"] = Conv(32,1,3,1,padding=1,bn_acti=True)
-        
-        head_segment["ra2_conv1"] = Conv(self.in_channels[1],32,3,1,padding=1,bn_acti=True)
-        head_segment["ra2_conv2"] = Conv(32,32,3,1,padding=1,bn_acti=True)
-        head_segment["ra2_conv3"] = Conv(32,1,3,1,padding=1,bn_acti=True)
-        
-        head_segment["ra3_conv1"] = Conv(self.in_channels[2],32,3,1,padding=1,bn_acti=True)
-        head_segment["ra3_conv2"] = Conv(32,32,3,1,padding=1,bn_acti=True)
-        head_segment["ra3_conv3"] = Conv(32,1,3,1,padding=1,bn_acti=True)
-        
-        head_segment["aa_kernel_1"] = AA_kernel(self.in_channels[0],self.in_channels[0])
-        head_segment["aa_kernel_2"] = AA_kernel(self.in_channels[1],self.in_channels[1])
-        head_segment["aa_kernel_3"] = AA_kernel(self.in_channels[2],self.in_channels[2])
-        
-        return head_segment
 
     def build_head_segment_rabit(self):
         head_segment = nn.ModuleDict()
@@ -118,67 +87,6 @@ class MultiTask(nn.Module):
                           nn.Linear(512, num_classes)
                         )
         return head_cls
-    
-    def forward_segment_colonformer(self, head, x):
-        x1 = x[0] # 1/4
-        x2 = x[1] # 1/8
-        x3 = x[2] # 1/16
-        x4 = x[3] # 1/32
-        
-        decoder_out = self.decode_head(x)
-        
-        decoder_1 = decoder_out
-        lateral_map_1 = F.interpolate(decoder_1, scale_factor=4, mode='bilinear')
-        
-        # ------------------- atten-one -----------------------
-        decoder_2 = F.interpolate(decoder_1, scale_factor=0.125, mode='bilinear')
-        cfp_out_1 = head["CFP_3"](x4)
-        # cfp_out_1 += x4
-        decoder_2_ra = -1*(torch.sigmoid(decoder_2)) + 1
-        aa_atten_3 = head["aa_kernel_3"](cfp_out_1)
-        aa_atten_3 += cfp_out_1
-        aa_atten_3_o = decoder_2_ra.expand(-1, self.in_channels[2], -1, -1).mul(aa_atten_3)
-        
-        ra_3 = head["ra3_conv1"](aa_atten_3_o) 
-        ra_3 = head["ra3_conv2"](ra_3) 
-        ra_3 = head["ra3_conv3"](ra_3) 
-        
-        x_3 = ra_3 + decoder_2
-        lateral_map_2 = F.interpolate(x_3,scale_factor=32,mode='bilinear')
-        
-        # ------------------- atten-two -----------------------      
-        decoder_3 = F.interpolate(x_3, scale_factor=2, mode='bilinear')
-        cfp_out_2 = head["CFP_2"](x3)
-        # cfp_out_2 += x3
-        decoder_3_ra = -1*(torch.sigmoid(decoder_3)) + 1
-        aa_atten_2 = head["aa_kernel_2"](cfp_out_2)
-        aa_atten_2 += cfp_out_2
-        aa_atten_2_o = decoder_3_ra.expand(-1, self.in_channels[1], -1, -1).mul(aa_atten_2)
-        
-        ra_2 = head["ra2_conv1"](aa_atten_2_o) 
-        ra_2 = head["ra2_conv2"](ra_2) 
-        ra_2 = head["ra2_conv3"](ra_2) 
-        
-        x_2 = ra_2 + decoder_3
-        lateral_map_3 = F.interpolate(x_2,scale_factor=16,mode='bilinear')        
-        
-        # ------------------- atten-three -----------------------
-        decoder_4 = F.interpolate(x_2, scale_factor=2, mode='bilinear')
-        cfp_out_3 = head["CFP_1"](x2)
-        # cfp_out_3 += x2
-        decoder_4_ra = -1*(torch.sigmoid(decoder_4)) + 1
-        aa_atten_1 = head["aa_kernel_1"](cfp_out_3)
-        aa_atten_1 += cfp_out_3
-        aa_atten_1_o = decoder_4_ra.expand(-1, self.in_channels[0], -1, -1).mul(aa_atten_1)
-        
-        ra_1 = head["ra1_conv1"](aa_atten_1_o) 
-        ra_1 = head["ra1_conv2"](ra_1) 
-        ra_1 = head["ra1_conv3"](ra_1) 
-        
-        x_1 = ra_1 + decoder_4
-        lateral_map_5 = F.interpolate(x_1,scale_factor=8,mode='bilinear') 
-        
-        return lateral_map_5,lateral_map_3,lateral_map_2,lateral_map_1
 
     def forward_segment_rabit(self, head, x):
         x1 = x[0] # 1/4
@@ -207,23 +115,13 @@ class MultiTask(nn.Module):
         return head(x)
 
     def forward(self, inputs):
-        if self.build_with_mmseg:
-            x = self.backbone(inputs)
-        else:
-            x = self.backbone(inputs, return_intermediates=True)[1]
+        x = self.backbone(inputs)
         
         if hasattr(self, 'neck'):
             x = self.neck(x)
         
-        if not self.build_with_mmseg:
-            x1 = x[0].permute(0, 3, 1, 2).contiguous() # 1/4
-            x2 = x[1].permute(0, 3, 1, 2).contiguous() # 1/8
-            x3 = x[2].permute(0, 3, 1, 2).contiguous() # 1/16
-            x4 = x[3].permute(0, 3, 1, 2).contiguous() # 1/32
-            x = [x1, x2, x3, x4]
-        
         # Forward segment
-        map = self.forward_segment_colonformer(self.head_seg, x)
+        map = self.forward_segment_rabit(self.head_seg, x)
         
         # Forward cls hp
         hp = self.forward_cls(self.head_cls_hp, x)

@@ -1,11 +1,13 @@
-pretrained = "/home/s/tuyenld/mae/pretrain/runs/pretrainv2/mae_meta_norm_pix_img224_p16/weight/last.pth"
+pretrained = "/home/s/tuyenld/mae_continue_pretrain_with_register/weight/last.pth"
+# pretrained = ""
 model = dict(
-    type='EncoderDecoderRaBiT',
+    type='MultiTask',
     pretrained=pretrained,
     backbone=dict(
         type='MaskedAutoencoderViT',
         downstream_size=384,
-        num_register_tokens=0,
+        num_register_tokens=4,
+        # num_register_tokens=0,
         out_indices=(2, 5, 8, 11),
     ),
     neck=dict(type='Feature2Pyramid', embed_dim=768, rescales=[4, 2, 1, 0.5]),

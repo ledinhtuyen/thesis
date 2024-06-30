@@ -9,10 +9,10 @@ python train_damage.py \
       --batchsize 8 \
       --test_batchsize 8 \
       --accum_iter 1 \
-      --type_damage viem_thuc_quan_20230620 \
+      --type_damage viem_loet_hoanh_ta_trang_20230620 \
       --num_workers 8 \
-      --prefix_path /workspace/DATA2 \
-      --work-dir work_dirs/damage/rabithead/mae_scratch \
+      --prefix_path /home/s/tuyenld/DATA \
+      --work-dir work_dirs/damage/rabithead/mae_scratch/vlhtt \
       --amp \
       --build_with_mmseg \
       --config configs/mae/rabithead/mae_base_meta_scratch_pre.py

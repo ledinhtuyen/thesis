@@ -1,4 +1,4 @@
-pretrained = "/workspace/mae/pretrain/runs/pretrainv2/continue_pretrain4_reg/weight/last.pth"
+pretrained = "/home/s/tuyenld/mae_continue_pretrain_with_register/weight/last.pth"
 # pretrained = "/workspace/mae/pretrain/runs/pretrainv2/continue_pretrain3/weight/epoch_90.pth"
 model = dict(
     type='EncoderDecoderRaBiT',
